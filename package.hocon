@@ -28,6 +28,6 @@ package {
 // an image for a board that has 520 KB of RAM and no heap worth the name.
 //
 // The one thing that is *not* claimed here: a backend will almost certainly need capabilities of
-// its own. PlutoVG asks for `alloc` and `posix`, and cairo asks for `alloc` and `os`. That cost is
+// its own. PlutoVG asks for `heap` and `posix`, and cairo asks for `heap` and `os`. That cost is
 // the backend's and is visible in the backend's own manifest, which is exactly where a program
 // should have to look for it.
