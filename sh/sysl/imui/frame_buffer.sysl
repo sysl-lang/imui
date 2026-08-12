@@ -1,0 +1,152 @@
+module sh.sysl.imui
+@no_alloc
+
+// A painter that writes RGB565 pixels straight into storage the caller owns.
+//
+// **This is the reference backend, and it is the one that shows the library's promise is real.** It
+// asks for no allocator, no operating system and no C library: a filled rectangle is a store loop
+// and text is a blit out of a bitmap font, which is the whole of what `Painter` requires. Everything
+// here runs on a microcontroller with nothing underneath it.
+//
+// It is also the argument against reaching for a vector rasterizer on a board. Cairo and PlutoVG
+// draw paths, curves, gradients and antialiased glyphs, and pay for them with an allocator and a
+// glyph cache -- and a panel of buttons and sliders uses none of it. The four primitives this
+// library asks for are the four a framebuffer already does well.
+//
+//     var pixels: [320 * 480]u16              -- or one band of it, for a small machine
+//     var fb = frame_buffer(pixels[0..<320 * 480], 320, 480, font)
+//
+//     ui.begin(ev)
+//     ...widgets, drawn through &fb...
+//     ui.finish()
+//
+// **RGB565 because that is what the panels take.** An ST7796 or an ILI9341 wants two bytes a pixel
+// in this order, so a frame is pushed over SPI with no conversion between here and the wire.
+
+// A bitmap font, supplied by the application.
+//
+// **A font is data and does not belong in a library**, which is why none ships here: the glyphs a
+// program needs, and how large, are its own business, and a fixed choice would be wrong for most
+// callers and wasteful of flash for the rest.
+//
+// The format is the simplest one that a font converter emits: `h` bytes per glyph, one per row, the
+// **most significant bit leftmost**, glyphs consecutive from `first`. A character outside the range
+// draws nothing rather than drawing a box, since a missing glyph in a label is better than a row of
+// tofu across a panel.
+struct Font
+    bits: []const u8
+    first: u8
+    count: usize
+
+    // How many columns of each byte are glyph, which is at most eight.
+    w: int
+
+    // Rows per glyph, and therefore bytes per glyph.
+    h: int
+
+    // How far the pen moves per character, usually `w` plus a column of space.
+    advance: int
+
+// Pixels the caller owns, and where the drawing goes.
+//
+// **`px` may be the whole screen or one band of it**, and the band case is what a machine with less
+// memory than a framebuffer does: set `y_offset` to the top of the band, hand `imui` the same
+// widgets, and only the rows in range are written. That is the same idea as `record.sysl`'s damage
+// bands and composes with them -- damage says *which* bands, this says *where they are*.
+struct FrameBuffer
+    px: []u16
+    w: int
+    h: int
+
+    // The screen row that `px` row zero is. Zero for a full framebuffer.
+    y_offset: int
+
+    font: Font
+    clip: Rect
+
+impl Painter for FrameBuffer
+    fill_rect(*self, r: Rect, color: u32)
+        val a = r.intersect(self.clip)
+
+        if a.is_empty() then return
+
+        val c = rgb565(color)
+
+        for y in a.y..<a.bottom()
+            val row = y - self.y_offset
+
+            if row < 0 || row >= self.h then continue
+
+            val base = usize(row * self.w)
+
+            for x in a.x..<a.right()
+                self.px[base + usize(x)] = c
+    end fill_rect
+
+    draw_text(*self, x: int, y: int, s: string, color: u32)
+        var pen = x
+
+        for i in 0..<s.len
+            glyph(self, pen, y, s[i], color)
+            pen += self.font.advance
+    end draw_text
+
+    set_clip(*self, r: Rect) = self.clip = r.intersect(Rect(0, 0, self.w, self.h + self.y_offset))
+
+    clear_clip(*self) = self.clip = Rect(0, 0, self.w, self.h + self.y_offset)
+
+    // Monospace, because a bitmap font of one advance is what a panel wants and measuring is then a
+    // multiply rather than a walk. It counts bytes, so it is exact for the ASCII a panel's labels
+    // are and wrong for anything wider -- which is the honest limit of a font this simple.
+    text_width(self, s: string) -> int = int(s.len) * self.font.advance
+
+    line_height(self) -> int = self.font.h
+
+// One glyph, a bit at a time. Beside the block rather than in it, because an `impl` supplies what
+// the trait asked for and nothing else.
+private glyph(fb: *FrameBuffer, x: int, y: int, ch: u8, color: u32)
+    if ch < fb.font.first then return
+
+    val index = usize(ch - fb.font.first)
+
+    if index >= fb.font.count then return
+
+    val c = rgb565(color)
+    val base = index * usize(fb.font.h)
+
+    for r in 0..<fb.font.h
+        val py = y + r
+
+        if py < fb.clip.y || py >= fb.clip.bottom() then continue
+
+        val row = py - fb.y_offset
+
+        if row < 0 || row >= fb.h then continue
+
+        val bits = fb.font.bits[base + usize(r)]
+
+        for col in 0..<fb.font.w
+            if (bits >> u8(7 - col)) & 1 == 0 then continue
+
+            val px = x + col
+
+            if px < fb.clip.x || px >= fb.clip.right() then continue
+
+            fb.px[usize(row * fb.w + px)] = c
+end glyph
+
+// `0xAARRGGBB` down to what the panel takes, by dropping the low bits of each channel.
+//
+// Integer shifts throughout, so nothing here starts a floating-point unit -- which matters on a
+// core that either has none or charges for waking it.
+rgb565(c: u32) -> u16 =
+    u16(((c >> 8) & 0xF800) | ((c >> 5) & 0x07E0) | ((c >> 3) & 0x001F))
+
+// A framebuffer over storage the caller owns.
+frame_buffer(px: []u16, w: int, h: int, font: Font) -> FrameBuffer =
+    FrameBuffer(px, w, h, 0, font, Rect(0, 0, w, h))
+
+// One band of a screen `h` tall, whose rows begin at `y_offset` -- for a machine that cannot hold a
+// whole frame.
+frame_band(px: []u16, w: int, rows: int, y_offset: int, screen_h: int, font: Font) -> FrameBuffer =
+    FrameBuffer(px, w, rows, y_offset, font, Rect(0, 0, w, screen_h))

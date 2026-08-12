@@ -500,3 +500,138 @@ private a_whole_screen_of_widgets_allocates_nothing_and_fits()
     assert(!rec.overflowed, "a full screen of widgets fits in 128 commands")
     assert(rec.recorded().len > 30, "and really did draw a screenful")
 end a_whole_screen_of_widgets_allocates_nothing_and_fits
+
+// ---- the framebuffer backend -------------------------------------------------------------------
+//
+// A font of two glyphs: 'A' is a solid 8x8 block and 'B' is blank. That makes a blit countable --
+// every lit pixel is one the glyph asked for -- which is what these assert on.
+
+private test_font(bits: []const u8) -> Font = Font(bits, u8('A'), 2, 8, 8, 8)
+
+private solid_then_blank() -> [16]u8
+    var bits: [16]u8 = [0; 16]
+
+    for i in 0..<8
+        bits[i] = 0xFF
+
+    bits
+end solid_then_blank
+
+private lit(px: []const u16) -> int
+    var n = 0
+
+    for i in 0..<px.len
+        if px[i] != 0 then n += 1
+
+    n
+end lit
+
+@test
+private a_framebuffer_fills_the_rectangle_it_was_given()
+    val bits = solid_then_blank()
+    var px: [16 * 16]u16 = [0; 16 * 16]
+    var fb = frame_buffer(px[0..<16 * 16], 16, 16, test_font(bits[0..<16]))
+
+    fb.fill_rect(Rect(2, 2, 4, 3), 0xFFFFFFFF)
+
+    assert(lit(px[0..<16 * 16]) == 12, "four by three pixels, and no others")
+    assert(px[2 * 16 + 2] != 0 && px[4 * 16 + 5] != 0, "the corners are inside")
+    assert(px[1 * 16 + 2] == 0 && px[2 * 16 + 6] == 0, "and one past each edge is not")
+end a_framebuffer_fills_the_rectangle_it_was_given
+
+@test
+private a_rectangle_is_clipped_to_the_surface_and_to_the_clip()
+    val bits = solid_then_blank()
+    var px: [16 * 16]u16 = [0; 16 * 16]
+    var fb = frame_buffer(px[0..<16 * 16], 16, 16, test_font(bits[0..<16]))
+
+    // hanging off three edges at once
+    fb.fill_rect(Rect(-4, -4, 100, 100), 0xFFFFFFFF)
+
+    assert(lit(px[0..<16 * 16]) == 256, "the whole surface, and nothing outside it")
+
+    // Pure blue, because it has to be a colour RGB565 can hold: the low three bits of a channel
+    // are dropped, so a value of 1 would convert to the same 0 the surface started at and the
+    // assertion below would be measuring nothing.
+    fb.set_clip(Rect(0, 0, 4, 4))
+    fb.fill_rect(Rect(0, 0, 16, 16), 0xFF0000FF)
+
+    var inside = 0
+
+    for y in 0..<4
+        for x in 0..<4
+            if px[y * 16 + x] == 0x001F then inside += 1
+
+    assert(inside == 16, "the second fill landed inside the clip")
+    assert(px[4 * 16 + 4] == 0xFFFF, "and left the pixel just outside it as it was")
+end a_rectangle_is_clipped_to_the_surface_and_to_the_clip
+
+@test
+private text_blits_the_glyphs_the_font_has_and_skips_the_rest()
+    val bits = solid_then_blank()
+    var px: [32 * 16]u16 = [0; 32 * 16]
+    var fb = frame_buffer(px[0..<32 * 16], 32, 16, test_font(bits[0..<16]))
+
+    fb.draw_text(0, 0, "A", 0xFFFFFFFF)
+
+    assert(lit(px[0..<32 * 16]) == 64, "a solid 8x8 glyph is 64 pixels")
+
+    fb.draw_text(8, 0, "B", 0xFFFFFFFF)
+
+    assert(lit(px[0..<32 * 16]) == 64, "the blank glyph added none")
+
+    fb.draw_text(16, 0, "Z", 0xFFFFFFFF)
+
+    assert(lit(px[0..<32 * 16]) == 64, "and a character the font does not cover draws nothing")
+end text_blits_the_glyphs_the_font_has_and_skips_the_rest
+
+@test
+private a_band_writes_only_the_rows_it_holds()
+    val bits = solid_then_blank()
+
+    // eight rows of a sixteen-row screen, starting at row 8
+    var px: [16 * 8]u16 = [0; 16 * 8]
+    var fb = frame_band(px[0..<16 * 8], 16, 8, 8, 16, test_font(bits[0..<16]))
+
+    // a rectangle spanning the whole screen: only the band's half of it should land
+    fb.fill_rect(Rect(0, 0, 16, 16), 0xFFFFFFFF)
+
+    assert(lit(px[0..<16 * 8]) == 128, "the band's eight rows, filled")
+
+    var px2: [16 * 8]u16 = [0; 16 * 8]
+    var top = frame_band(px2[0..<16 * 8], 16, 8, 0, 16, test_font(bits[0..<16]))
+
+    // a rectangle wholly below this band
+    top.fill_rect(Rect(0, 10, 16, 4), 0xFFFFFFFF)
+
+    assert(lit(px2[0..<16 * 8]) == 0, "and a rectangle outside the band writes nothing at all")
+end a_band_writes_only_the_rows_it_holds
+
+@test
+private rgb565_keeps_the_high_bits_of_each_channel()
+    assert(rgb565(0xFF000000) == 0, "black")
+    assert(rgb565(0xFFFFFFFF) == 0xFFFF, "white")
+    assert(rgb565(0xFFFF0000) == 0xF800, "red is the top five bits")
+    assert(rgb565(0xFF00FF00) == 0x07E0, "green is the middle six")
+    assert(rgb565(0xFF0000FF) == 0x001F, "blue is the bottom five")
+end rgb565_keeps_the_high_bits_of_each_channel
+
+@test
+private a_whole_panel_draws_through_the_framebuffer_with_no_allocator()
+    val bits = solid_then_blank()
+    var px: [320 * 60]u16 = [0; 320 * 60]
+    var fb = frame_buffer(px[0..<320 * 60], 320, 60, test_font(bits[0..<16]))
+    var u = ui()
+    val th = dark()
+    var page = layout(Rect(0, 0, 320, 60).inset(th.pad), th.pad)
+    var on = true
+
+    u.begin(pointer(40, 20, true))
+    toggle(&u, &fb, th, page.cut_top(th.min_touch), "Backlight", &on)
+    button(&u, &fb, th, page.cut_top(20), "Apply")
+    u.finish()
+
+    // The whole file is `@no_alloc`, so this compiling at all is the assertion that matters; that
+    // it drew something is what says the widgets really went through the backend.
+    assert(lit(px[0..<320 * 60]) > 500, "a panel's worth of pixels was written")
+end a_whole_panel_draws_through_the_framebuffer_with_no_allocator
