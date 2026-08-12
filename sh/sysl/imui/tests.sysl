@@ -1,0 +1,502 @@
+module sh.sysl.imui
+@tests
+@no_alloc
+
+// The library's own tests, run by `sysl test .`.
+//
+// **`@no_alloc` is repeated here because a capability is a property of the module rather than of a
+// file**, and that is worth more than it costs: a test that quietly allocated would fail to compile
+// rather than pass, so the promise the package makes is held by the tests as well as by the code.
+// It is also why `assert` is used throughout and `assert_eq` is not -- `assert_eq` renders its two
+// values through a trait object, which allocates.
+//
+// **Nearly all of them run a real frame through a real painter.** `Metrics` measures and counts,
+// `Recorder` writes down what was asked for, and an assertion then reads the frame back. So these
+// check what a panel would look like rather than only that the arithmetic returns something, and
+// the interaction tests drive the widgets the way a finger would: press, move, release.
+
+private screen() -> Rect = Rect(0, 0, 320, 480)
+
+// A pointer at a place, pressed or not, with no D-pad.
+private touch(x: int, y: int, down: bool) -> Input = pointer(x, y, down)
+
+@test
+private rect_edges_are_half_open()
+    val r = Rect(10, 20, 30, 40)
+
+    assert(r.right() == 40 && r.bottom() == 60, "right and bottom are corner plus size")
+    assert(r.contains(10, 20), "the top-left corner is inside")
+    assert(!r.contains(40, 20), "the right edge is outside")
+    assert(!r.contains(10, 60), "the bottom edge is outside")
+    assert(r.contains(39, 59), "one short of each is inside")
+end rect_edges_are_half_open
+
+@test
+private rectangles_that_miss_intersect_to_nothing()
+    val a = Rect(0, 0, 10, 10)
+    val b = Rect(20, 20, 10, 10)
+
+    assert(a.intersect(b).is_empty(), "disjoint rectangles have an empty intersection")
+    assert(!a.overlaps(b), "and do not overlap")
+    assert(a.intersect(Rect(5, 5, 10, 10)) == Rect(5, 5, 5, 5), "an overlap is the shared part")
+end rectangles_that_miss_intersect_to_nothing
+
+@test
+private an_empty_rectangle_contributes_nothing_to_a_cover()
+    val a = Rect(100, 100, 10, 10)
+
+    assert(a.cover(empty_rect()) == a, "covering with nothing changes nothing")
+    assert(empty_rect().cover(a) == a, "and the other way round")
+    assert(a.cover(Rect(0, 0, 5, 5)) == Rect(0, 0, 110, 110), "otherwise it is the bounding box")
+end an_empty_rectangle_contributes_nothing_to_a_cover
+
+@test
+private a_layout_shrinks_as_pieces_are_cut_from_it()
+    var l = layout(Rect(0, 0, 100, 100), 4)
+    val top = l.cut_top(20)
+
+    assert(top == Rect(0, 0, 100, 20), "the piece is the full width and the height asked for")
+    assert(l.rest() == Rect(0, 24, 100, 76), "and the gap comes out of what is left")
+
+    val left = l.cut_left(30)
+
+    assert(left == Rect(0, 24, 30, 76), "a left cut is the full remaining height")
+    assert(l.rest().x == 34, "and moves the remainder past the gap")
+end a_layout_shrinks_as_pieces_are_cut_from_it
+
+@test
+private an_exhausted_layout_gives_empty_rectangles()
+    var l = layout(Rect(0, 0, 100, 20), 0)
+
+    l.cut_top(20)
+
+    assert(l.is_exhausted(), "everything has been taken")
+    assert(l.cut_top(10).is_empty(), "and there is nothing left to give")
+    assert(l.cut_left(10).is_empty(), "in either direction")
+end an_exhausted_layout_gives_empty_rectangles
+
+@test
+private equal_columns_cover_the_row_exactly()
+    var l = layout(Rect(0, 0, 100, 20), 4)
+    val a = l.cut_left_frac(0, 3)
+    val b = l.cut_left_frac(1, 3)
+    val c = l.cut_left_frac(2, 3)
+
+    assert(a.x == 0 && b.x == a.right() + 4 && c.x == b.right() + 4, "gaps between, none outside")
+    assert(c.right() == 100, "and the last column takes the remainder, leaving no seam")
+end equal_columns_cover_the_row_exactly
+
+@test
+private a_call_site_is_its_own_identity()
+    val a = site()
+    val b = site()
+    val c = site()
+
+    assert(a != b && b != c, "three lines, three identities")
+end a_call_site_is_its_own_identity
+
+@test
+private a_seed_separates_the_same_line_from_itself()
+    var u = ui()
+
+    u.seed = 1
+
+    val first = u.id_at(1234)
+
+    u.seed = 2
+
+    assert(u.id_at(1234) != first, "the same call site under two seeds is two widgets")
+    assert(u.id_at(0) != 0, "and no identity is ever zero, which means nothing")
+end a_seed_separates_the_same_line_from_itself
+
+@test
+private a_button_answers_on_release_over_itself()
+    var m = metrics(7, 14)
+    var u = ui()
+    val th = dark()
+    val r = Rect(0, 0, 100, 40)
+
+    u.begin(touch(50, 20, false))
+
+    assert(!button(&u, &m, th, r, "OK", 1), "hovering is not a press")
+
+    u.finish()
+    u.begin(touch(50, 20, true))
+
+    assert(!button(&u, &m, th, r, "OK", 1), "and going down is not a press either")
+
+    u.finish()
+    u.begin(touch(50, 20, false))
+
+    assert(button(&u, &m, th, r, "OK", 1), "letting go over it is")
+
+    u.finish()
+end a_button_answers_on_release_over_itself
+
+@test
+private a_press_that_wanders_off_does_not_fire()
+    var m = metrics(7, 14)
+    var u = ui()
+    val th = dark()
+    val r = Rect(0, 0, 100, 40)
+
+    u.begin(touch(50, 20, true))
+    button(&u, &m, th, r, "OK", 1)
+    u.finish()
+
+    // still held, but the finger has left the button
+    u.begin(touch(200, 300, true))
+
+    assert(!button(&u, &m, th, r, "OK", 1), "dragging away arms nothing")
+
+    u.finish()
+    u.begin(touch(200, 300, false))
+
+    assert(!button(&u, &m, th, r, "OK", 1), "and releasing elsewhere is a cancel")
+
+    u.finish()
+end a_press_that_wanders_off_does_not_fire
+
+@test
+private a_press_that_wanders_back_still_fires()
+    var m = metrics(7, 14)
+    var u = ui()
+    val th = dark()
+    val r = Rect(0, 0, 100, 40)
+
+    u.begin(touch(50, 20, true))
+    button(&u, &m, th, r, "OK", 1)
+    u.finish()
+
+    u.begin(touch(200, 300, true))
+    button(&u, &m, th, r, "OK", 1)
+    u.finish()
+
+    u.begin(touch(50, 20, false))
+
+    assert(button(&u, &m, th, r, "OK", 1), "the press was captured and is still the button's")
+
+    u.finish()
+end a_press_that_wanders_back_still_fires
+
+@test
+private a_checkbox_writes_the_callers_own_bool()
+    var m = metrics(7, 14)
+    var u = ui()
+    val th = dark()
+    val r = Rect(0, 0, 200, 40)
+    var on = false
+
+    u.begin(touch(10, 20, true))
+    checkbox(&u, &m, th, r, "enabled", &on, 1)
+    u.finish()
+
+    assert(!on, "nothing happens while it is held")
+
+    u.begin(touch(10, 20, false))
+    checkbox(&u, &m, th, r, "enabled", &on, 1)
+    u.finish()
+
+    assert(on, "and it flips on release")
+end a_checkbox_writes_the_callers_own_bool
+
+@test
+private a_slider_follows_the_pointer_and_clamps()
+    var m = metrics(7, 14)
+    var u = ui()
+    val th = dark()
+    val r = Rect(0, 0, 124, 24)
+    var v = 0
+
+    // take the slider, then drag to the far right and beyond
+    u.begin(touch(12, 12, true))
+    slider(&u, &m, th, r, &v, 0, 100, 1)
+    u.finish()
+
+    u.begin(touch(1000, 12, true))
+    slider(&u, &m, th, r, &v, 0, 100, 1)
+    u.finish()
+
+    assert(v == 100, "dragging past the end stops at the top of the range")
+
+    u.begin(touch(-500, 12, true))
+    slider(&u, &m, th, r, &v, 0, 100, 1)
+    u.finish()
+
+    assert(v == 0, "and past the other end stops at the bottom")
+end a_slider_follows_the_pointer_and_clamps
+
+@test
+private the_focus_walks_the_frame_and_wraps()
+    var m = metrics(7, 14)
+    var u = ui()
+    val th = dark()
+    val a = Rect(0, 0, 100, 40)
+    val b = Rect(0, 50, 100, 40)
+    val c = Rect(0, 100, 100, 40)
+
+    // nothing focused: the first move lands on the first widget
+    u.begin(Input(0, 0, false, 1, false))
+    button(&u, &m, th, a, "a", 11)
+    button(&u, &m, th, b, "b", 22)
+    button(&u, &m, th, c, "c", 33)
+    u.finish()
+
+    val first = u.focus
+
+    assert(first != 0, "a nav with nothing focused focuses something")
+
+    u.begin(Input(0, 0, false, 1, false))
+    button(&u, &m, th, a, "a", 11)
+    button(&u, &m, th, b, "b", 22)
+    button(&u, &m, th, c, "c", 33)
+    u.finish()
+
+    val second = u.focus
+
+    assert(second != first, "and the next moves on")
+
+    u.begin(Input(0, 0, false, 1, false))
+    button(&u, &m, th, a, "a", 11)
+    button(&u, &m, th, b, "b", 22)
+    button(&u, &m, th, c, "c", 33)
+    u.finish()
+
+    u.begin(Input(0, 0, false, 1, false))
+    button(&u, &m, th, a, "a", 11)
+    button(&u, &m, th, b, "b", 22)
+    button(&u, &m, th, c, "c", 33)
+    u.finish()
+
+    assert(u.focus == first, "and past the last it wraps to the first")
+end the_focus_walks_the_frame_and_wraps
+
+@test
+private the_activate_button_presses_the_focused_widget()
+    var m = metrics(7, 14)
+    var u = ui()
+    val th = dark()
+    val r = Rect(0, 0, 100, 40)
+
+    u.begin(Input(0, 0, false, 1, false))
+    button(&u, &m, th, r, "OK", 7)
+    u.finish()
+
+    assert(u.is_focused(u.id_at(7)), "the nav landed on it")
+
+    u.begin(Input(0, 0, false, 0, true))
+
+    assert(button(&u, &m, th, r, "OK", 7), "and the activate button presses it, with no pointer")
+
+    u.finish()
+end the_activate_button_presses_the_focused_widget
+
+@test
+private a_focus_on_a_widget_that_vanished_falls_back()
+    var m = metrics(7, 14)
+    var u = ui()
+    val th = dark()
+    val r = Rect(0, 0, 100, 40)
+
+    u.begin(Input(0, 0, false, 1, false))
+    button(&u, &m, th, r, "a", 11)
+    button(&u, &m, th, r.moved(0, 50), "b", 22)
+    u.finish()
+
+    val was = u.focus
+
+    // the focused widget is not drawn at all this frame
+    u.begin(no_input())
+    button(&u, &m, th, r.moved(0, 50), "b", 22)
+    u.finish()
+
+    assert(u.focus != was, "the focus does not stay on something that is not there")
+    assert(u.focus == u.id_at(22), "it falls back to the first widget the frame did draw")
+end a_focus_on_a_widget_that_vanished_falls_back
+
+@test
+private a_recorder_writes_down_what_was_asked_for()
+    var m = metrics(7, 14)
+    var cmds: [16]Cmd
+    var rec = recorder(&m, cmds[0..<16])
+    val th = dark()
+
+    rec.reset()
+    panel(&rec, th, Rect(0, 0, 100, 50))
+    label(&rec, th, Rect(0, 0, 100, 50), "hi", 0)
+
+    val out = rec.recorded()
+
+    // a panel is one fill and four stroke fills, then the label's text
+    assert(out.len == 6, "six primitives went past")
+    assert(out[0].kind == KIND_FILL && out[0].color == th.panel, "the panel's face first")
+    assert(out[5].kind == KIND_TEXT && out[5].text == "hi", "and the text last")
+    assert(out[5].r.w == 14 && out[5].r.h == 14, "measured through the painter, not guessed")
+    assert(!rec.overflowed, "and it all fitted")
+end a_recorder_writes_down_what_was_asked_for
+
+@test
+private a_frame_that_does_not_fit_says_so()
+    var m = metrics(7, 14)
+    var cmds: [3]Cmd
+    var rec = recorder(&m, cmds[0..<3])
+    val th = dark()
+
+    rec.reset()
+    panel(&rec, th, Rect(0, 0, 100, 50))
+
+    assert(rec.overflowed, "a panel is five primitives and there was room for three")
+    assert(rec.recorded().len == 3, "and what fitted is still there")
+end a_frame_that_does_not_fit_says_so
+
+@test
+private two_identical_frames_damage_nothing()
+    var m = metrics(7, 14)
+    var a: [32]Cmd
+    var b: [32]Cmd
+    var one = recorder(&m, a[0..<32])
+    var two = recorder(&m, b[0..<32])
+    val th = dark()
+
+    one.reset()
+    panel(&one, th, Rect(0, 0, 320, 100))
+
+    two.reset()
+    panel(&two, th, Rect(0, 0, 320, 100))
+
+    assert(damage(one.recorded(), two.recorded(), screen(), 16) == 0, "nothing moved, nothing dirty")
+end two_identical_frames_damage_nothing
+
+@test
+private a_change_dirties_only_the_bands_it_touches()
+    var m = metrics(7, 14)
+    var a: [32]Cmd
+    var b: [32]Cmd
+    var one = recorder(&m, a[0..<32])
+    var two = recorder(&m, b[0..<32])
+
+    // 480 rows in 16 bands is 30 rows each, so this sits squarely in band 8
+    val r = Rect(0, 240, 100, 20)
+
+    one.reset()
+    one.fill_rect(r, 0xFF000000)
+
+    two.reset()
+    two.fill_rect(r, 0xFFFFFFFF)
+
+    val mask = damage(one.recorded(), two.recorded(), screen(), 16)
+
+    assert(mask == (1u32 << 8), "one band, and it is the one the rectangle is in")
+end a_change_dirties_only_the_bands_it_touches
+
+@test
+private a_rectangle_that_moves_dirties_where_it_was_and_where_it_is()
+    var m = metrics(7, 14)
+    var a: [32]Cmd
+    var b: [32]Cmd
+    var one = recorder(&m, a[0..<32])
+    var two = recorder(&m, b[0..<32])
+
+    one.reset()
+    one.fill_rect(Rect(0, 0, 100, 20), 0xFF000000)
+
+    two.reset()
+    two.fill_rect(Rect(0, 450, 100, 20), 0xFF000000)
+
+    val mask = damage(one.recorded(), two.recorded(), screen(), 16)
+
+    assert((mask & 1u32) != 0, "the band it left has to be painted over")
+    assert((mask & (1u32 << 15)) != 0, "and the band it arrived in has to be drawn")
+    assert(mask == (1u32 | (1u32 << 15)), "and nothing in between")
+end a_rectangle_that_moves_dirties_where_it_was_and_where_it_is
+
+@test
+private adjacent_dirty_bands_come_back_as_one_rectangle()
+    // bands 2, 3 and 4 dirty, then band 9
+    val mask = (1u32 << 2) | (1u32 << 3) | (1u32 << 4) | (1u32 << 9)
+    val first = next_band(mask, 16, screen(), 0)
+
+    assert(first.is_some(), "there is a dirty run")
+
+    val a = first.unwrap()
+
+    assert(a.rect.y == 60 && a.rect.h == 90, "three 30-row bands, sent as one 90-row window")
+
+    val second = next_band(mask, 16, screen(), a.next)
+
+    assert(second.is_some(), "and another after it")
+
+    val b = second.unwrap()
+
+    assert(b.rect.y == 270 && b.rect.h == 30, "the lone band on its own")
+    assert(next_band(mask, 16, screen(), b.next).is_none(), "and then no more")
+end adjacent_dirty_bands_come_back_as_one_rectangle
+
+@test
+private every_band_is_dirty_when_the_record_cannot_be_trusted()
+    assert(all_bands(16) == 0xFFFF, "sixteen bands, sixteen bits")
+    assert(all_bands(32) == 0xFFFFFFFF, "and the mask is full at the maximum")
+    assert(all_bands(0) == 1, "a nonsense count is one band rather than none")
+end every_band_is_dirty_when_the_record_cannot_be_trusted
+
+@test
+private a_replay_draws_only_what_reaches_the_band()
+    var m = metrics(7, 14)
+    var cmds: [16]Cmd
+    var rec = recorder(&m, cmds[0..<16])
+
+    rec.reset()
+    rec.fill_rect(Rect(0, 0, 100, 20), 0xFF000000)
+    rec.fill_rect(Rect(0, 400, 100, 20), 0xFF000000)
+
+    var out = metrics(7, 14)
+
+    out.reset()
+    replay(rec.recorded(), &out, Rect(0, 0, 320, 30))
+
+    // the clip in, the one rectangle that reaches the band, and the clip out
+    assert(out.drawn == 3, "the far rectangle was skipped")
+
+    out.reset()
+    replay(rec.recorded(), &out, screen())
+
+    assert(out.drawn == 4, "and a full-screen band draws both")
+end a_replay_draws_only_what_reaches_the_band
+
+@test
+private a_whole_screen_of_widgets_allocates_nothing_and_fits()
+    var m = metrics(7, 14)
+    var cmds: [128]Cmd
+    var rec = recorder(&m, cmds[0..<128])
+    var u = ui()
+    val th = dark()
+    var page = layout(screen().inset(th.pad), th.pad)
+    var on = true
+    var level = 40
+    var chosen = 0
+
+    rec.reset()
+    u.begin(touch(0, 0, false))
+
+    label(&rec, th, page.cut_top(24), "Settings", -1)
+
+    var tabs = layout(page.cut_top(36), 0)
+
+    tab(&u, &rec, th, tabs.cut_left_frac(0, 2), "Panel", 0, &chosen, 101)
+    tab(&u, &rec, th, tabs.cut_left_frac(1, 2), "Radio", 1, &chosen, 102)
+
+    separator(&rec, th, page.cut_top(9))
+    toggle(&u, &rec, th, page.cut_top(th.min_touch), "Backlight", &on, 103)
+    slider(&u, &rec, th, page.cut_top(th.min_touch), &level, 0, 100, 104)
+    progress(&rec, th, page.cut_top(12), level, 100)
+
+    var row = layout(page.cut_bottom(th.min_touch), th.pad)
+
+    button(&u, &rec, th, row.cut_left_frac(0, 2), "Cancel", 105)
+    accent_button(&u, &rec, th, row.cut_left_frac(1, 2), "Apply", 106)
+
+    u.finish()
+
+    assert(!rec.overflowed, "a full screen of widgets fits in 128 commands")
+    assert(rec.recorded().len > 30, "and really did draw a screenful")
+end a_whole_screen_of_widgets_allocates_nothing_and_fits

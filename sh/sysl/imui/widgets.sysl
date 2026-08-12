@@ -1,0 +1,204 @@
+module sh.sysl.imui
+@no_alloc
+
+// The widgets, each one a function of the frame rather than an object in a tree.
+//
+// **They are free functions and not methods on `Ui`, on purpose.** sysl declares a type's methods
+// with the type, so a widget written by a program using this library could never be a method on
+// `Ui` -- and a library whose own widgets are spelled `ui.button(...)` while everybody else's are
+// spelled `my_gauge(&ui, ...)` teaches that its extension point is second class. Written this way
+// there is no difference: `gauge` below could as easily be in the application, and the four things
+// a widget does are the four calls every one of these makes.
+//
+//     val id = ui.id_at(site)          -- take an identity for the call site
+//     val hit = ui.interact(id, r)     -- ask what the pointer and the D-pad did to that rectangle
+//     ...draw through p, using ui.is_hot / is_active / is_focused...
+//     hit                              -- hand the answer back; the application owns the state
+//
+// Every one of them takes the painter as `p: *P` for `[P: Painter]`, so the calls monomorphize into
+// direct calls and no method table exists anywhere in a built program.
+
+// A filled panel with a hairline border -- the background other widgets are laid on.
+panel[P: Painter](p: *P, th: Theme, r: Rect)
+    p.fill_rect(r, th.panel)
+    p.stroke_rect(r, th.border, th.border_w)
+
+// A line of text, vertically centred in `r`. `align` is -1 left, 0 centred, 1 right.
+//
+// Not interactive, so it takes no `Ui` and is skipped by a D-pad, which is what a caption should
+// do.
+label[P: Painter](p: *P, th: Theme, r: Rect, s: string, align: int) =
+    p.text_in(r, s, th.text, align)
+
+// The same, in the muted colour -- a unit, a hint, a reading that is not the point.
+muted_label[P: Painter](p: *P, th: Theme, r: Rect, s: string, align: int) =
+    p.text_in(r, s, th.muted, align)
+
+// A hairline across the middle of `r`, for separating groups.
+separator[P: Painter](p: *P, th: Theme, r: Rect) =
+    p.hline(r.x, r.y + r.h / 2, r.w, th.border)
+
+// A push button. True on the frame it is released over itself, or activated while focused.
+button[P: Painter](ui: *Ui, p: *P, th: Theme, r: Rect, s: string, site_id: u32 = site()) -> bool
+    val id = ui.id_at(site_id)
+    val hit = ui.interact(id, r)
+
+    p.fill_rect(r, ui.control_color(th, id))
+
+    if ui.is_focused(id)
+        p.stroke_rect(r, th.focus, if th.border_w < 2 then 2 else th.border_w)
+    else
+        p.stroke_rect(r, th.border, th.border_w)
+
+    p.text_in(r, s, th.text, 0)
+    hit
+end button
+
+// A button drawn in the accent colour, for the one action a screen is about.
+accent_button[P: Painter](ui: *Ui, p: *P, th: Theme, r: Rect, s: string,
+                          site_id: u32 = site()) -> bool
+    val id = ui.id_at(site_id)
+    val hit = ui.interact(id, r)
+    val base = th.accent
+    val face = if ui.is_active(id) then mix(base, 0xFF000000, 64)
+    else if ui.is_hot(id) then mix(base, 0xFFFFFFFF, 32)
+    else base
+
+    p.fill_rect(r, face)
+
+    if ui.is_focused(id) then p.stroke_rect(r, th.focus, 2)
+
+    p.text_in(r, s, th.bg, 0)
+    hit
+end accent_button
+
+// A checkbox with its label to the right of it. `on` is the application's own storage, written
+// through when the box is clicked; the answer is whether it changed this frame.
+//
+// **The value belongs to the caller and not to this library**, which is the whole of immediate
+// mode in one signature: there is nothing here to keep it in, and nothing to keep it *synchronised*
+// with either, so the class of bug where a widget and its model disagree cannot be written.
+checkbox[P: Painter](ui: *Ui, p: *P, th: Theme, r: Rect, s: string, on: *bool,
+                     site_id: u32 = site()) -> bool
+    val id = ui.id_at(site_id)
+    val hit = ui.interact(id, r)
+    val side = if r.h < 24 then r.h else 24
+    val box = Rect(r.x, r.y + (r.h - side) / 2, side, side)
+
+    p.fill_rect(box, ui.control_color(th, id))
+    p.stroke_rect(box, if ui.is_focused(id) then th.focus else th.border,
+                  if ui.is_focused(id) then 2 else th.border_w)
+
+    if *on then p.fill_rect(box.inset(side / 4), th.accent)
+
+    label(p, th, Rect(box.right() + th.pad, r.y, r.w - side - th.pad, r.h), s, -1)
+
+    if hit then *on = !*on
+
+    hit
+end checkbox
+
+// A switch: the same idea as a checkbox, drawn as a sliding track, for a setting rather than a
+// choice in a list.
+toggle[P: Painter](ui: *Ui, p: *P, th: Theme, r: Rect, s: string, on: *bool,
+                   site_id: u32 = site()) -> bool
+    val id = ui.id_at(site_id)
+    val hit = ui.interact(id, r)
+    val h = if r.h < 26 then r.h else 26
+    val w = h * 2
+    val track = Rect(r.right() - w, r.y + (r.h - h) / 2, w, h)
+    val knob = Rect(if *on then track.right() - h else track.x, track.y, h, h)
+
+    label(p, th, Rect(r.x, r.y, r.w - w - th.pad, r.h), s, -1)
+
+    p.fill_rect(track, if *on then th.accent else ui.control_color(th, id))
+    p.fill_rect(knob.inset(2), th.text)
+
+    if ui.is_focused(id) then p.stroke_rect(track, th.focus, 2)
+
+    if hit then *on = !*on
+
+    hit
+end toggle
+
+// A horizontal slider over the integers `lo` to `hi` inclusive, written back through `v`.
+//
+// **Dragging is the one interaction that needs the capture in `Ui.active`**, and it is why capture
+// is in the library rather than in each widget: once the press has landed the pointer may leave the
+// track entirely and the value must go on following it, which is what every other toolkit does and
+// what a hit test alone cannot express.
+//
+// The arithmetic is integer throughout. A board has no reason to start its floating-point unit to
+// move a knob, and rounding to the nearest step is exact this way.
+slider[P: Painter](ui: *Ui, p: *P, th: Theme, r: Rect, v: *int, lo: int, hi: int,
+                   site_id: u32 = site()) -> bool
+    val id = ui.id_at(site_id)
+    val span = if hi > lo then hi - lo else 1
+
+    ui.interact(id, r)
+
+    val knob = if r.h < 24 then r.h else 24
+    val track = Rect(r.x + knob / 2, r.y + r.h / 2 - 2, r.w - knob, 4)
+    val before = *v
+
+    if ui.is_active(id) && track.w > 0
+        val dx = ui.input.x - track.x
+        val clamped = if dx < 0 then 0 else if dx > track.w then track.w else dx
+
+        *v = lo + (clamped * span + track.w / 2) / track.w
+
+    // The focused slider moves a step at a time, which is what makes it reachable without a
+    // pointer at all.
+    if ui.is_focused(id) && ui.input.activate && !ui.prev_activate
+        *v = if *v >= hi then lo else *v + 1
+
+    val now = if *v < lo then lo else if *v > hi then hi else *v
+
+    *v = now
+
+    val at = track.x + ((now - lo) * track.w + span / 2) / span
+
+    p.fill_rect(track, th.control)
+    p.fill_rect(Rect(track.x, track.y, at - track.x, track.h), th.accent)
+
+    val head = Rect(at - knob / 2, r.y + (r.h - knob) / 2, knob, knob)
+
+    p.fill_rect(head, ui.control_color(th, id))
+    p.stroke_rect(head, if ui.is_focused(id) then th.focus else th.border,
+                  if ui.is_focused(id) then 2 else th.border_w)
+
+    now != before
+end slider
+
+// A read-only bar showing `num` out of `den`.
+progress[P: Painter](p: *P, th: Theme, r: Rect, num: int, den: int)
+    val d = if den > 0 then den else 1
+    val n = if num < 0 then 0 else if num > d then d else num
+
+    p.fill_rect(r, th.control)
+    p.fill_rect(Rect(r.x, r.y, r.w * n / d, r.h), th.accent)
+    p.stroke_rect(r, th.border, th.border_w)
+end progress
+
+// One tab of a row. `chosen` is the application's own index, written through when a tab is picked.
+tab[P: Painter](ui: *Ui, p: *P, th: Theme, r: Rect, s: string, index: int, chosen: *int,
+                site_id: u32 = site()) -> bool
+    val id = ui.id_at(site_id)
+    val hit = ui.interact(id, r)
+    val on = *chosen == index
+
+    p.fill_rect(r, if on then th.panel else th.bg)
+
+    if on
+        p.fill_rect(Rect(r.x, r.bottom() - 2, r.w, 2), th.accent)
+    else if ui.is_hot(id)
+        p.fill_rect(Rect(r.x, r.bottom() - 2, r.w, 2), th.border)
+
+    if ui.is_focused(id) then p.stroke_rect(r, th.focus, 2)
+
+    p.text_in(r, s, if on then th.text else th.muted, 0)
+
+    if hit then *chosen = index
+
+    hit
+end tab

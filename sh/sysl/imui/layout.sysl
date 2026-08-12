@@ -1,0 +1,92 @@
+module sh.sysl.imui
+@no_alloc
+
+// Where a widget goes, worked out by cutting pieces off a rectangle.
+//
+// **This is the whole layout engine, and it is deliberately not a constraint solver.** A solver
+// wants a retained tree to solve over, and there isn't one here; what there is instead is an area
+// that shrinks as widgets are taken out of it, which is enough for the panels this library is for
+// and costs four integers of state.
+//
+// It composes the way rectangles do rather than the way a widget tree does: a piece cut off the top
+// is itself a `Layout`, so a row of controls inside a strip inside a panel is three of these and no
+// nesting anywhere in the library has to know about it.
+//
+//     var page = layout(screen, theme.pad)
+//     val title = page.cut_top(28)
+//     var row = layout(page.cut_top(theme.min_touch), 4)
+//     val ok = row.cut_left(90)
+//     val cancel = row.cut_left(90)
+//
+// **Cutting from an exhausted layout gives an empty rectangle rather than a wrong one**, and every
+// widget draws nothing when handed one. So a list that runs off the bottom of its panel simply
+// stops being visible, with nothing in the caller checking for it.
+struct Layout
+    area: Rect
+    gap: int
+
+    // What is left, which a caller cuts further or fills itself.
+    rest(self) -> Rect = self.area
+
+    is_exhausted(self) -> bool = self.area.is_empty()
+
+    cut_top(*self, h: int) -> Rect
+        if self.area.is_empty() then return empty_rect()
+
+        val taken = if h < self.area.h then h else self.area.h
+        val r = Rect(self.area.x, self.area.y, self.area.w, taken)
+
+        self.area = Rect(self.area.x, self.area.y + taken + self.gap,
+                         self.area.w, self.area.h - taken - self.gap)
+        r
+    end cut_top
+
+    cut_bottom(*self, h: int) -> Rect
+        if self.area.is_empty() then return empty_rect()
+
+        val taken = if h < self.area.h then h else self.area.h
+        val r = Rect(self.area.x, self.area.bottom() - taken, self.area.w, taken)
+
+        self.area = Rect(self.area.x, self.area.y, self.area.w, self.area.h - taken - self.gap)
+        r
+    end cut_bottom
+
+    cut_left(*self, w: int) -> Rect
+        if self.area.is_empty() then return empty_rect()
+
+        val taken = if w < self.area.w then w else self.area.w
+        val r = Rect(self.area.x, self.area.y, taken, self.area.h)
+
+        self.area = Rect(self.area.x + taken + self.gap, self.area.y,
+                         self.area.w - taken - self.gap, self.area.h)
+        r
+    end cut_left
+
+    cut_right(*self, w: int) -> Rect
+        if self.area.is_empty() then return empty_rect()
+
+        val taken = if w < self.area.w then w else self.area.w
+        val r = Rect(self.area.right() - taken, self.area.y, taken, self.area.h)
+
+        self.area = Rect(self.area.x, self.area.y, self.area.w - taken - self.gap, self.area.h)
+        r
+    end cut_right
+
+    // The `i`th of `n` equal columns, gaps included -- a row of buttons, without the caller working
+    // out the arithmetic each time.
+    //
+    // **The remainder goes to the last column** rather than being dropped, so `n` cells always cover
+    // the area exactly and a row of three across 100 pixels does not leave a one-pixel seam down the
+    // right-hand edge.
+    cut_left_frac(*self, i: usize, n: usize) -> Rect
+        if n == 0 then return empty_rect()
+        if i + 1 == n then return self.cut_left(self.area.w)
+
+        val total = self.area.w - self.gap * int(n - 1)
+        val each = total / int(n)
+
+        self.cut_left(if each < 0 then 0 else each)
+    end cut_left_frac
+
+// A layout over `area`, leaving `gap` pixels between the pieces cut from it.
+layout(area: Rect, gap: int) -> Layout = Layout(area, gap)

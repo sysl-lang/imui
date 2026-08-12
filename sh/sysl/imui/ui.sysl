@@ -1,0 +1,236 @@
+module sh.sysl.imui
+@no_alloc
+
+// The frame, and everything the library remembers between two of them.
+//
+// **There is no widget tree, and there is no table of widget state either.** The card this package
+// came from proposed a fixed-size table keyed by widget id; building it showed the table was not
+// needed for anything here, because the only state a button, a toggle or a slider needs *between*
+// frames is which widget the pointer captured and which one has the focus -- and that is three
+// integers, not a table. So `Ui` is about a dozen words, all of it fixed at compile time, and there
+// is nothing in this library that could allocate even if `@no_alloc` were taken off.
+//
+// The table becomes necessary the moment a widget carries state of its own that the application
+// does not hold -- a text field's cursor and selection is the obvious one -- and that is where it
+// should be added, rather than up front for widgets that turn out not to want it.
+//
+// A frame is:
+//
+//     ui.begin(input)
+//     ...widgets, in the order they are drawn...
+//     ui.finish()
+//
+// Everything between the two calls reads `ui` for interaction and hands drawing to `p`, and the
+// application keeps whatever the widgets return. The library never holds the application's data.
+
+// What happened at the panel since the last frame.
+//
+// **A pointer and four buttons, which is deliberately both of the input devices a small panel
+// has.** A touchscreen fills in `x`, `y` and `down` and leaves the rest alone; a board with a
+// D-pad and no touch fills in `nav` and `activate` and leaves the pointer where it is. A program
+// that has both fills in both, and the widgets do not care which arrived.
+struct Input
+    x: int
+    y: int
+    down: bool
+
+    // -1 to move the focus back one widget, +1 to move it on one, 0 for neither.
+    nav: int
+
+    // The "press the focused thing" button, which is a D-pad's centre or a keyboard's enter.
+    activate: bool
+
+// The identity of the place this was called from, which is what a widget uses when the caller does
+// not name one.
+//
+// **The whole of immediate mode's identity problem, answered by the compiler.** There is no widget
+// object to hang an identity on, so it has to come from somewhere else, and a call site is the one
+// thing that is stable from frame to frame without anything being stored. `__FILE__` and `__LINE__`
+// are ordinary defaulted arguments, and a default is evaluated where the call is written -- so
+// `button(...)` on two different lines is two widgets and the caller writes nothing.
+//
+// **Two widgets on one line share an id**, which is the one case this cannot see, and the answer is
+// to pass `id` explicitly or to set `Ui.seed`. It is also why `seed` exists for loops: every turn
+// of a loop is the same line.
+//
+// The hash is FNV-1a over the path and then the line. It walks the file name on every call, which
+// is a few dozen cheap iterations per widget per frame -- unmeasurable against the drawing, and the
+// reason not to cache it is that caching would need storage, which is the thing being avoided.
+site(file: string = __FILE__, line: int = __LINE__) -> u32
+    var h: u32 = 2166136261
+
+    for i in 0..<file.len
+        h = (h ^ u32(u8(file[i]))) * 16777619
+
+    (h ^ u32(line)) * 16777619
+end site
+
+// The input of a panel with nothing touched and no button held.
+no_input() -> Input = Input(0, 0, false, 0, false)
+
+// A pointer at `x`, `y`, pressed or not -- the touchscreen case, spelled in one call.
+pointer(x: int, y: int, down: bool) -> Input = Input(x, y, down, 0, false)
+
+// Everything the library keeps between frames, which is three ids and some bookkeeping.
+struct Ui
+    input: Input
+    prev_down: bool
+    prev_activate: bool
+
+    // The widget under the pointer, this frame.
+    hot: u32
+
+    // The widget the pointer went down on and has not let go of. A press captures, so dragging off
+    // a button and back onto it behaves the way every other toolkit behaves.
+    active: u32
+
+    // The widget a D-pad or a keyboard is pointed at.
+    focus: u32
+
+    // Mixed into every call-site id, so the same line of source can raise a different widget on
+    // each turn of a loop. See `id_at`.
+    seed: u32
+
+    nav_want: int
+    take_next: bool
+    wrap_prev: bool
+    focus_seen: bool
+    first: u32
+    prev: u32
+    last: u32
+
+    begin(*self, ev: Input)
+        self.input = ev
+        self.hot = 0
+        self.nav_want = ev.nav
+        self.take_next = false
+        self.wrap_prev = false
+        self.focus_seen = false
+        self.first = 0
+        self.prev = 0
+        self.last = 0
+    end begin
+
+    // Close the frame: settle a focus move that ran off either end, and remember the button state
+    // so the next frame can see an edge rather than a level.
+    //
+    // **The wrap-around cannot be done where the move is asked for**, which is why this exists at
+    // all. Moving on from the last widget wraps to the first, and moving back from the first wraps
+    // to the last -- and at the moment either is asked, the frame has not yet met the widget it
+    // needs. So both are recorded and answered here, when the whole frame's order is known.
+    finish(*self)
+        if self.take_next then self.focus = self.first
+        if self.wrap_prev then self.focus = self.last
+
+        // Nothing was focused and something asked to move, so start at one end.
+        if self.focus == 0 && self.nav_want != 0
+            self.focus = if self.nav_want > 0 then self.first else self.last
+
+        // The focused widget was not drawn this frame -- it was on a page that has been left, or
+        // inside an `if` that is now false. Falling back to the first keeps a D-pad usable instead
+        // of stranding the focus on something invisible.
+        if self.focus != 0 && !self.focus_seen then self.focus = self.first
+
+        self.take_next = false
+        self.wrap_prev = false
+        self.nav_want = 0
+        self.prev_down = self.input.down
+        self.prev_activate = self.input.activate
+    end finish
+
+    is_hot(self, id: u32) -> bool = self.hot == id && id != 0
+
+    is_active(self, id: u32) -> bool = self.active == id && id != 0
+
+    is_focused(self, id: u32) -> bool = self.focus == id && id != 0
+
+    // A call site's id, mixed with `seed`.
+    //
+    // **`seed` is how a widget inside a loop gets an identity**, and it is a plain field rather
+    // than a stack because a stack would be state this library has promised not to keep:
+    //
+    //     for i in 0..<rows.len
+    //         ui.seed = u32(i) + 1
+    //         if ui.button(&p, th, r, "delete") then remove(i)
+    //     ui.seed = 0
+    //
+    // Zero is never handed back, because zero is what `hot`, `active` and `focus` use for "nothing".
+    id_at(self, site: u32) -> u32
+        val h = (site ^ self.seed) * 16777619
+
+        if h == 0 then 1 else h
+    end id_at
+
+    // Put `id` in this frame's focus order, and answer whether it holds the focus now.
+    //
+    // Every interactive widget calls this, and a program building one of its own must too --
+    // a widget that does not is simply skipped over by a D-pad, which is the right thing for a
+    // label and wrong for anything a finger could press.
+    focusable(*self, id: u32) -> bool
+        if self.first == 0 then self.first = id
+
+        if self.take_next
+            self.focus = id
+            self.take_next = false
+
+        if id == self.focus
+            self.focus_seen = true
+
+            if self.nav_want > 0
+                self.take_next = true
+                self.nav_want = 0
+            else if self.nav_want < 0
+                if self.prev != 0
+                    self.focus = self.prev
+                else
+                    self.wrap_prev = true
+
+                self.nav_want = 0
+
+        self.prev = id
+        self.last = id
+        self.focus == id
+    end focusable
+
+    // The whole of pointer and D-pad handling, for one widget occupying `r`.
+    //
+    // Answers true on the frame the widget is *released* over itself, or on the frame the focused
+    // widget's activate button goes down -- which is a click, in both of the idioms this library
+    // supports. A press that wanders off the widget and lets go somewhere else answers false, and
+    // that is the behaviour the capture in `active` exists to give.
+    interact(*self, id: u32, r: Rect) -> bool
+        val over = r.contains(self.input.x, self.input.y)
+        var fired = false
+
+        if over then self.hot = id
+
+        if self.active == id
+            if !self.input.down
+                if over then fired = true
+
+                self.active = 0
+        else if over && self.input.down && !self.prev_down
+            self.active = id
+            self.focus = id
+
+        if self.focusable(id) && self.input.activate && !self.prev_activate then fired = true
+
+        fired
+    end interact
+
+    // The colour a control should be drawn in, given who is touching it.
+    //
+    // One place rather than one per widget, so a theme that changes reaches everything and so the
+    // three states cannot drift apart between a button and a toggle.
+    control_color(self, th: Theme, id: u32) -> u32
+        if self.is_active(id) then th.control_active
+        else if self.is_hot(id) then th.control_hot
+        else th.control
+    end control_color
+
+// A fresh frame state, with nothing focused and nothing touched.
+//
+// A program keeps one of these for as long as the panel is on screen. It is a value like any other
+// and can sit in a `var` in `main`, in a struct, or in module storage -- there is nothing to open
+// and nothing to release, because there is nothing in it but numbers.
+ui() -> Ui = Ui(no_input(), false, false, 0, 0, 0, 0, 0, false, false, false, 0, 0, 0)

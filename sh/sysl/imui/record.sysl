@@ -1,0 +1,260 @@
+module sh.sysl.imui
+@no_alloc
+
+// Recording a frame, comparing it with the last one, and repainting only what moved.
+//
+// **This is the part that makes the library usable on a board rather than merely small.** A
+// 320x480 panel is 300 KB of pixels over SPI, and pushing all of it because one button lit up is
+// the difference between a user interface and a slideshow. So a frame is drawn into a list of
+// commands the caller owns, the list is compared with the previous frame's, and only the
+// horizontal bands that differ are drawn for real and sent.
+//
+// The comparison is by **position in the list**, which is what makes it cheap and is also its one
+// real limitation: a widget added or removed part-way through shifts everything after it and
+// dirties the rest of the screen. That is the right trade for a panel, where the same widgets are
+// emitted in the same order every frame and only their colours and positions change. A frame that
+// really has changed shape has usually changed most of its pixels anyway.
+//
+//     var cmds_a: [256]Cmd
+//     var cmds_b: [256]Cmd
+//     var rec = recorder(&real, cmds_a[0..<256])
+//
+//     rec.reset()
+//     ui.begin(ev)
+//     ...widgets, drawn through &rec...
+//     ui.finish()
+//
+//     val mask = damage(prev, rec.recorded(), screen, 16)
+//     var from: usize = 0
+//     var band = next_band(mask, 16, screen, from)
+//
+//     while band.is_some()
+//         val b = band.unwrap()
+//         replay(rec.recorded(), &real, b.rect)     -- and push b.rect to the panel
+//         band = next_band(mask, 16, screen, b.next)
+//
+// The two command arrays swap each frame, so nothing is copied and nothing is allocated.
+
+// A filled rectangle.
+const KIND_FILL: u8 = 1
+
+// A line of text, whose `Rect` is where it was measured to land.
+const KIND_TEXT: u8 = 2
+
+// A clip was set to this rectangle.
+const KIND_CLIP: u8 = 3
+
+// The clip was dropped.
+const KIND_UNCLIP: u8 = 4
+
+// One thing a painter was asked to do.
+//
+// The whole `Painter` surface fits in this, which is not a coincidence: the trait was kept to four
+// primitives *because* a command has to be able to carry any of them, and a trait that grew a fifth
+// would silently make the replay below incomplete.
+struct Cmd
+    kind: u8
+    r: Rect
+    color: u32
+    text: string
+
+    // Whether two commands would put the same pixels down.
+    //
+    // The text is compared by content rather than by address, so a label rebuilt into a different
+    // buffer each frame does not dirty a band it did not change.
+    same(self, o: Cmd) -> bool
+        if self.kind != o.kind then return false
+        if self.r.x != o.r.x || self.r.y != o.r.y then return false
+        if self.r.w != o.r.w || self.r.h != o.r.h then return false
+        if self.color != o.color then return false
+
+        self.kind != KIND_TEXT || self.text == o.text
+    end same
+
+    // What this command could have touched. A clip command touches nothing itself.
+    bounds(self) -> Rect =
+        if self.kind == KIND_CLIP || self.kind == KIND_UNCLIP then empty_rect() else self.r
+
+// A painter that writes the frame down instead of drawing it, and asks the real one how wide the
+// text is.
+//
+// **It has to hold the real painter, and that is the interesting part of its design.** A command
+// list has to record where text *landed* or the damage pass cannot tell which band a label is in --
+// and only something holding a font can answer that. So the recorder measures through `M` and draws
+// through nothing, which is also what makes it exact rather than an estimate.
+struct Recorder[M: Painter]
+    m: *M
+    cmds: []Cmd
+    n: usize
+
+    // Set when the frame did not fit. The list is then incomplete, so comparing it with the last
+    // frame would answer confidently and wrongly, and the caller repaints everything instead --
+    // `all_bands` is that answer, and its prose says why this is the caller's decision to make.
+    overflowed: bool
+
+    reset(*self)
+        self.n = 0
+        self.overflowed = false
+    end reset
+
+    // This frame's commands, in the order they were made.
+    recorded(self) -> []const Cmd = self.cmds[0..<self.n]
+
+    put(*self, c: Cmd)
+        if self.n >= self.cmds.len
+            self.overflowed = true
+            return
+
+        self.cmds[self.n] = c
+        self.n += 1
+    end put
+
+impl[M: Painter] Painter for Recorder[M]
+    fill_rect(*self, r: Rect, color: u32)
+        if !r.is_empty() then self.put(Cmd(KIND_FILL, r, color, ""))
+
+    draw_text(*self, x: int, y: int, s: string, color: u32)
+        val w = self.m.text_width(s)
+        val h = self.m.line_height()
+
+        self.put(Cmd(KIND_TEXT, Rect(x, y, w, h), color, s))
+    end draw_text
+
+    set_clip(*self, r: Rect) = self.put(Cmd(KIND_CLIP, r, 0, ""))
+
+    clear_clip(*self) = self.put(Cmd(KIND_UNCLIP, empty_rect(), 0, ""))
+
+    text_width(self, s: string) -> int = self.m.text_width(s)
+
+    line_height(self) -> int = self.m.line_height()
+
+// A recorder measuring through `m` and writing into storage the caller owns.
+recorder[M: Painter](m: *M, into: []Cmd) -> Recorder[M] = Recorder(m, into, 0, false)
+
+// Draw a recorded frame for real, restricted to `only`.
+//
+// Commands that cannot touch `only` are skipped, which is where the saving is. Clip commands are
+// *not* skipped -- they change what the commands after them may do, so dropping one because its own
+// rectangle is elsewhere would let a later command paint outside where it belongs.
+replay[P: Painter](cmds: []const Cmd, p: *P, only: Rect)
+    p.set_clip(only)
+
+    for c in cmds
+        if c.kind == KIND_FILL
+            if c.r.overlaps(only) then p.fill_rect(c.r, c.color)
+        else if c.kind == KIND_TEXT
+            if c.r.overlaps(only) then p.draw_text(c.r.x, c.r.y, c.text, c.color)
+        else if c.kind == KIND_CLIP
+            p.set_clip(c.r.intersect(only))
+        else
+            p.set_clip(only)
+
+    p.clear_clip()
+end replay
+
+// The most bands `damage` will divide a screen into, being the width of the mask it answers with.
+const MAX_BANDS: usize = 32
+
+// How tall one band is, when `screen` is divided into `bands` of them.
+//
+// Rounded up, so `bands` of this height always cover the screen -- the last one hangs over the
+// bottom edge and is clipped by `band_rect`, which is cheaper than carrying a remainder.
+band_height(screen: Rect, bands: usize) -> int
+    val n: usize = if bands < 1 then 1 else if bands > MAX_BANDS then MAX_BANDS else bands
+
+    (screen.h + int(n) - 1) / int(n)
+end band_height
+
+// The rectangle band `i` covers.
+band_rect(screen: Rect, bands: usize, i: usize) -> Rect
+    val h = band_height(screen, bands)
+    val top = screen.y + int(i) * h
+    val bottom = if top + h < screen.bottom() then top + h else screen.bottom()
+
+    Rect(screen.x, top, screen.w, bottom - top)
+end band_rect
+
+// Every band, which is what a caller repaints when it cannot trust a comparison.
+//
+// **The case that matters is `Recorder.overflowed`.** A frame that did not fit its command list has
+// no usable record of itself, so comparing it with the last one would answer confidently and
+// wrongly -- some of the screen would simply stop being repainted, which is a bug that looks like a
+// display fault. The caller's line is `if rec.overflowed then all_bands(n) else damage(...)`, and
+// the reason it is the caller's rather than hidden inside `damage` is that a program should be able
+// to notice it is happening.
+all_bands(bands: usize) -> u32
+    val n: usize = if bands < 1 then 1 else if bands > MAX_BANDS then MAX_BANDS else bands
+
+    if n >= MAX_BANDS then 0xFFFFFFFF else (1u32 << u32(n)) - 1
+end all_bands
+
+// Which bands differ between two recorded frames, as a bit per band.
+//
+// Bit `i` is set when band `i` has to be repainted, which happens when a command at some position
+// in the list is not the one that was there last frame: both the old rectangle and the new one are
+// marked, since the old one has to be painted over and the new one has to appear.
+damage(prev: []const Cmd, cur: []const Cmd, screen: Rect, bands: usize) -> u32
+    val n: usize = if bands < 1 then 1 else if bands > MAX_BANDS then MAX_BANDS else bands
+    val all = all_bands(n)
+    val count = if prev.len > cur.len then prev.len else cur.len
+    var mask: u32 = 0
+
+    for i in 0..<count
+        val differs = i >= prev.len || i >= cur.len || !prev[i].same(cur[i])
+
+        if differs
+            if i < prev.len then mask = mask | bands_touching(prev[i].bounds(), screen, n)
+            if i < cur.len then mask = mask | bands_touching(cur[i].bounds(), screen, n)
+
+    mask & all
+end damage
+
+// The bands a rectangle reaches into.
+bands_touching(r: Rect, screen: Rect, bands: usize) -> u32
+    if r.is_empty() then return 0
+
+    val h = band_height(screen, bands)
+
+    if h <= 0 then return 0
+
+    val top = r.y - screen.y
+    val bottom = r.bottom() - screen.y
+    val first = if top < 0 then 0 else top / h
+    val last = if bottom <= 0 then 0 else (bottom - 1) / h
+    var mask: u32 = 0
+
+    for i in first..last
+        if i >= 0 && i < int(bands) then mask = mask | (1u32 << u32(i))
+
+    mask
+end bands_touching
+
+// A band that needs repainting, and where to look for the next one.
+struct Band
+    rect: Rect
+    next: usize
+
+// The next run of dirty bands at or after `from`, as one rectangle.
+//
+// **Adjacent dirty bands come back as a single rectangle**, which is the point of walking runs
+// rather than bands: a panel is addressed by writing a window and then streaming it, so two bands
+// sent as one window costs one command exchange instead of two and no extra pixels at all.
+next_band(mask: u32, bands: usize, screen: Rect, from: usize) -> Option[Band]
+    val n: usize = if bands < 1 then 1 else if bands > MAX_BANDS then MAX_BANDS else bands
+    var i = from
+
+    while i < n && (mask & (1u32 << u32(i))) == 0
+        i += 1
+
+    if i >= n then return None
+
+    var j = i
+
+    while j < n && (mask & (1u32 << u32(j))) != 0
+        j += 1
+
+    val top = band_rect(screen, n, i)
+    val last = band_rect(screen, n, j - 1)
+
+    Some(Band(Rect(top.x, top.y, top.w, last.bottom() - top.y), j))
+end next_band

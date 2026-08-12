@@ -1,0 +1,42 @@
+module sh.sysl.imui
+@no_alloc
+
+// A painter that measures and does not draw.
+//
+// **It is the backend a test uses, and it is also the one a program uses to lay a screen out before
+// there is a screen.** Wrapped in a `Recorder` it gives a complete, inspectable frame -- every
+// rectangle, every string, every colour, in order -- with no window, no font file and no graphics
+// library anywhere near it. That is what lets this library's own tests assert what a panel looks
+// like rather than only that the arithmetic did not crash.
+//
+// It counts what went past as well, so a test can say "this frame drew eleven things" without
+// looking at any of them.
+//
+// **The text measurement is monospace and counts bytes**, which is exact for ASCII and wrong for
+// anything else. That is the right shape for a test oracle -- an answer that is a pure function of
+// the string, so an assertion about a layout is stable -- and it is the reason this is not offered
+// as a way to lay out real text. A real backend measures with a real font.
+struct Metrics
+    char_w: int
+    line_h: int
+
+    // How many primitives have been through, which `reset` puts back to zero.
+    drawn: usize
+
+    reset(*self) = self.drawn = 0
+
+impl Painter for Metrics
+    fill_rect(*self, r: Rect, color: u32) = self.drawn += 1
+
+    draw_text(*self, x: int, y: int, s: string, color: u32) = self.drawn += 1
+
+    set_clip(*self, r: Rect) = self.drawn += 1
+
+    clear_clip(*self) = self.drawn += 1
+
+    text_width(self, s: string) -> int = int(s.len) * self.char_w
+
+    line_height(self) -> int = self.line_h
+
+// A measuring painter for a font `char_w` wide and `line_h` tall.
+metrics(char_w: int, line_h: int) -> Metrics = Metrics(char_w, line_h, 0)

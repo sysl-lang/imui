@@ -1,0 +1,33 @@
+// An immediate-mode user interface for sysl, sized for a panel on a microcontroller.
+//
+// There is no `dependencies` block and there is no `requires` block, and both absences are the
+// point of the package. It depends on no other sysl package because it rasterizes nothing: the
+// drawing is done by whatever the program hands it, through the `Painter` trait, so cairo on a
+// desktop and PlutoVG on a board are the *caller's* choice and neither appears here.
+//
+// This is the block a consumer writes to reach it:
+//
+//     dependencies {
+//       imui { git = "github.com/sysl-lang/imui", version = "0.1.0" }
+//     }
+//
+// The coordinate is identity rather than a URL, so it carries no `https://`, and the version is the
+// tag `v0.1.0` on this repository.
+
+package {
+  name    = "imui"
+  version = "0.1.0"
+}
+
+// **There is deliberately no `requires` block, and the module says so a second time by declaring
+// `@no_alloc`** -- which the compiler then holds it to, file by file, including the tests.
+//
+// It asks the machine for nothing: no allocator, no operating system, no C library. Every piece of
+// storage it uses is either a field of a struct the caller declared or a slice the caller handed
+// over, which is the same bargain `sh.sysl.harness` makes and the reason either can be linked into
+// an image for a board that has 520 KB of RAM and no heap worth the name.
+//
+// The one thing that is *not* claimed here: a backend will almost certainly need capabilities of
+// its own. PlutoVG asks for `alloc` and `posix`, and cairo asks for `alloc` and `os`. That cost is
+// the backend's and is visible in the backend's own manifest, which is exactly where a program
+// should have to look for it.

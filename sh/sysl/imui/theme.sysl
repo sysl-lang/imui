@@ -1,0 +1,58 @@
+module sh.sysl.imui
+@no_alloc
+
+// The colours and the three measurements every widget reads.
+//
+// A struct the caller owns rather than module storage, so two panels can be themed differently and
+// so nothing here holds state that outlives a frame. It is copied by value into each widget call
+// and is small enough for that to be the right thing.
+//
+// **`pad`, `border` and `min_touch` are in the theme rather than in the widgets** because they are
+// the numbers that change with the *screen*, not with the widget. A 320x480 panel poked with a
+// finger wants a 44-pixel minimum target and a desktop window does not, and putting that one number
+// in one place is the difference between a library that ports and one that is rewritten.
+struct Theme
+    bg: u32
+    panel: u32
+    border: u32
+    text: u32
+    muted: u32
+    control: u32
+    control_hot: u32
+    control_active: u32
+    accent: u32
+    focus: u32
+
+    pad: int
+    border_w: int
+    min_touch: int
+
+// A dark theme, which is the one a panel in a case usually wants.
+dark() -> Theme
+    Theme(rgb(0x14, 0x16, 0x1a),
+          rgb(0x1c, 0x1f, 0x26),
+          rgb(0x2e, 0x33, 0x3d),
+          rgb(0xe6, 0xe9, 0xef),
+          rgb(0x8a, 0x93, 0xa3),
+          rgb(0x2a, 0x2f, 0x38),
+          rgb(0x39, 0x40, 0x4c),
+          rgb(0x4a, 0x53, 0x62),
+          rgb(0x4f, 0x9c, 0xf5),
+          rgb(0x7d, 0xbb, 0xff),
+          8, 1, 44)
+end dark
+
+// A light theme, which is the one a bench instrument in a bright room wants.
+light() -> Theme
+    Theme(rgb(0xf4, 0xf5, 0xf7),
+          rgb(0xff, 0xff, 0xff),
+          rgb(0xd2, 0xd6, 0xdd),
+          rgb(0x1a, 0x1d, 0x23),
+          rgb(0x6b, 0x74, 0x84),
+          rgb(0xe8, 0xea, 0xee),
+          rgb(0xdc, 0xdf, 0xe5),
+          rgb(0xc6, 0xcb, 0xd3),
+          rgb(0x1a, 0x73, 0xe8),
+          rgb(0x1a, 0x73, 0xe8),
+          8, 1, 44)
+end light

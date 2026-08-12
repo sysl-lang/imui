@@ -1,0 +1,70 @@
+module sh.sysl.imui
+@no_alloc
+
+// The seam between this library and whatever actually puts pixels down.
+//
+// **Four primitives and two questions.** A backend writes `fill_rect`, `draw_text`, `set_clip` and
+// `clear_clip`, and answers `text_width` and `line_height`; everything else in this file has a body
+// already and comes free. That is a small enough surface that PlutoVG, cairo, a terminal and the
+// recorder in `record.sysl` are each a few dozen lines, and it is small enough that a *command
+// list* can cover the whole of it -- which is what makes the damage pass possible at all.
+//
+// **A bound, never a trait object.** Every widget in this library takes `p: *P` for some
+// `[P: Painter]`, so the calls monomorphize and lower to direct calls with no method table
+// anywhere. A `*Painter` object would be dynamically dispatched and would allocate, which is what
+// breaks `@no_alloc` -- so the sigil that is not written here is as much a part of the design as
+// the six members that are.
+//
+// **Text is positioned by the top-left of its box, not by its baseline.** Every layout calculation
+// in this library is then rectangle arithmetic, and the one place that has to know where a baseline
+// sits is the backend, which is the only part that has a font to ask.
+trait Painter
+    // Fill a rectangle with a solid colour. An empty rectangle draws nothing.
+    fill_rect(*self, r: Rect, color: u32)
+
+    // Draw a line of text with the top-left of its box at `x`, `y`.
+    draw_text(*self, x: int, y: int, s: string, color: u32)
+
+    // Restrict drawing to `r` until the next `set_clip` or `clear_clip`.
+    set_clip(*self, r: Rect)
+
+    clear_clip(*self)
+
+    // How wide `s` would be, in pixels, in the font this painter draws with.
+    text_width(self, s: string) -> int
+
+    // The height of one line, which is what a widget uses to size itself around its label.
+    line_height(self) -> int
+
+    // A one-pixel-wide horizontal line -- the separator, and the edge of everything below.
+    hline(*self, x: int, y: int, w: int, color: u32) = self.fill_rect(Rect(x, y, w, 1), color)
+
+    vline(*self, x: int, y: int, h: int, color: u32) = self.fill_rect(Rect(x, y, 1, h), color)
+
+    // An outline `n` pixels thick, drawn *inside* `r`.
+    //
+    // Four fills rather than a rectangle-minus-a-rectangle, because a backend that had to express
+    // this as a path would need a fill rule, and one that draws straight into a framebuffer -- which
+    // is the case this library is for -- would rather have four spans than one path.
+    stroke_rect(*self, r: Rect, color: u32, n: int)
+        if r.is_empty() || n <= 0 then return
+
+        self.fill_rect(Rect(r.x, r.y, r.w, n), color)
+        self.fill_rect(Rect(r.x, r.bottom() - n, r.w, n), color)
+        self.fill_rect(Rect(r.x, r.y + n, n, r.h - 2 * n), color)
+        self.fill_rect(Rect(r.right() - n, r.y + n, n, r.h - 2 * n), color)
+    end stroke_rect
+
+    // Text laid in a box: `align` is -1 left, 0 centred, 1 right, and it is vertically centred
+    // whatever happens.
+    //
+    // This is where `text_width` earns its place on the trait. A library that could only *draw*
+    // text would have to make every caller pass a width it measured some other way, and a label
+    // centred in a button is the single most common thing a UI does.
+    text_in(*self, r: Rect, s: string, color: u32, align: int)
+        val tw = self.text_width(s)
+        val th = self.line_height()
+        val x = if align < 0 then r.x else if align > 0 then r.right() - tw else r.x + (r.w - tw) / 2
+
+        self.draw_text(x, r.y + (r.h - th) / 2, s, color)
+    end text_in

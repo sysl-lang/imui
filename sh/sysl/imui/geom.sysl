@@ -1,0 +1,117 @@
+module sh.sysl.imui
+@no_alloc
+
+// Rectangles and colours -- the two things every part of this library speaks in.
+//
+// Both are deliberately plain. A `Rect` is four `int`s and a colour is a `u32`, so a draw command
+// is a handful of words that can sit in an array the caller owns, and comparing two frames' worth
+// of them is comparing integers. That is what makes the damage pass in `record.sysl` affordable on
+// a board.
+
+// A rectangle in pixels, given by its top-left corner and its size.
+//
+// **The edges are half-open**: a rectangle at `x` of width `w` covers the columns `x` up to but not
+// including `x + w`, exactly as a slice does. Two rectangles laid side by side therefore share no
+// column, which is the property that makes `split_left` below exact rather than off by one.
+//
+// A negative width or height is *empty* rather than an error, and every operation here keeps that
+// true: intersecting two rectangles that miss each other gives an empty one, and drawing it is a
+// no-op. That is what lets a layout run off the bottom of a panel without anything checking.
+struct Rect
+    x: int
+    y: int
+    w: int
+    h: int
+
+    right(self) -> int = self.x + self.w
+
+    bottom(self) -> int = self.y + self.h
+
+    is_empty(self) -> bool = self.w <= 0 || self.h <= 0
+
+    // Whether a point is inside, which is the whole of hit testing in this library.
+    contains(self, px: int, py: int) -> bool =
+        px >= self.x && px < self.right() && py >= self.y && py < self.bottom()
+
+    overlaps(self, o: Rect) -> bool =
+        !self.is_empty() && !o.is_empty() &&
+        self.x < o.right() && o.x < self.right() && self.y < o.bottom() && o.y < self.bottom()
+
+    // The rectangle both cover, which is empty when they miss.
+    intersect(self, o: Rect) -> Rect
+        val x = if self.x > o.x then self.x else o.x
+        val y = if self.y > o.y then self.y else o.y
+        val r = if self.right() < o.right() then self.right() else o.right()
+        val b = if self.bottom() < o.bottom() then self.bottom() else o.bottom()
+
+        Rect(x, y, r - x, b - y)
+    end intersect
+
+    // The smallest rectangle covering both -- what the damage pass unions with.
+    //
+    // An empty rectangle contributes nothing, which is why this is not simply four min/max calls:
+    // unioning with an empty rectangle sitting at the origin would drag the answer to the origin
+    // with it, and a widget that drew nothing would dirty the top-left corner of the screen.
+    cover(self, o: Rect) -> Rect
+        if self.is_empty() then return o
+        if o.is_empty() then return self
+
+        val x = if self.x < o.x then self.x else o.x
+        val y = if self.y < o.y then self.y else o.y
+        val r = if self.right() > o.right() then self.right() else o.right()
+        val b = if self.bottom() > o.bottom() then self.bottom() else o.bottom()
+
+        Rect(x, y, r - x, b - y)
+    end cover
+
+    // The same rectangle pulled in by `n` on every side, which is how padding is spelled.
+    inset(self, n: int) -> Rect = Rect(self.x + n, self.y + n, self.w - 2 * n, self.h - 2 * n)
+
+    moved(self, dx: int, dy: int) -> Rect = Rect(self.x + dx, self.y + dy, self.w, self.h)
+
+// Two rectangles are the same when their four numbers are.
+//
+// **Written out rather than derived, because sysl derives nothing** -- and it is worth having: the
+// damage pass compares rectangles by field for speed, and a test comparing them by `==` is reading
+// the same claim in a form a person can check.
+impl Eq for Rect
+    eq(self, rhs: Rect) -> bool =
+        self.x == rhs.x && self.y == rhs.y && self.w == rhs.w && self.h == rhs.h
+
+// The empty rectangle, which every operation here treats as nothing rather than as a point.
+empty_rect() -> Rect = Rect(0, 0, 0, 0)
+
+// A colour, as `0xAARRGGBB` in a single word.
+//
+// **A word rather than a struct, and the reason is the damage pass.** Two frames are compared field
+// by field, and a colour that is one integer compares in one instruction; a struct of four bytes
+// would compare in four and buy nothing, since no arithmetic in this library ever looks at a
+// channel. Only a backend unpacks one, and `color_r` and its three companions are here for it.
+rgb(r: int, g: int, b: int) -> u32 = 0xFF000000 | (u32(r) << 16) | (u32(g) << 8) | u32(b)
+
+rgba(r: int, g: int, b: int, a: int) -> u32 =
+    (u32(a) << 24) | (u32(r) << 16) | (u32(g) << 8) | u32(b)
+
+color_a(c: u32) -> int = int((c >> 24) & 0xFF)
+
+color_r(c: u32) -> int = int((c >> 16) & 0xFF)
+
+color_g(c: u32) -> int = int((c >> 8) & 0xFF)
+
+color_b(c: u32) -> int = int(c & 0xFF)
+
+// A colour `t` of the way from `a` to `b`, where `t` runs 0 to 256.
+//
+// **The mix is in 0..256 rather than in a float on purpose.** A board that is drawing this has no
+// reason to start the floating-point unit for a hover highlight, and a shift by eight is exact
+// where a multiply by 0.5 and a round is not. Every shade this library asks for -- a pressed
+// button, a disabled label -- is one call to this.
+mix(a: u32, b: u32, t: int) -> u32
+    val k = if t < 0 then 0 else if t > 256 then 256 else t
+    val j = 256 - k
+
+    rgba((color_r(a) * j + color_r(b) * k) >> 8,
+         (color_g(a) * j + color_g(b) * k) >> 8,
+         (color_b(a) * j + color_b(b) * k) >> 8,
+         (color_a(a) * j + color_a(b) * k) >> 8)
+end mix
