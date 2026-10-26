@@ -9,11 +9,9 @@ module sh.sysl.imui
 // commands the caller owns, the list is compared with the previous frame's, and only the
 // horizontal bands that differ are drawn for real and sent.
 //
-// The comparison is by **position in the list**, which is what makes it cheap and is also its one
-// real limitation: a widget added or removed part-way through shifts everything after it and
-// dirties the rest of the screen. That is the right trade for a panel, where the same widgets are
-// emitted in the same order every frame and only their colours and positions change. A frame that
-// really has changed shape has usually changed most of its pixels anyway.
+// Matching prefixes and suffixes are skipped before comparing the changed middle by position.
+// A focus outline inserted into one widget therefore leaves the unchanged widgets after it clean.
+// The work stays linear, uses no allocation, and does not require persistent widget identities.
 //
 //     var cmds_a: [256]Cmd
 //     var cmds_b: [256]Cmd
@@ -196,15 +194,31 @@ end all_bands
 damage(prev: []const Cmd, cur: []const Cmd, screen: Rect, bands: usize) -> u32
     val n: usize = if bands < 1 then 1 else if bands > MAX_BANDS then MAX_BANDS else bands
     val all = all_bands(n)
-    val count = if prev.len > cur.len then prev.len else cur.len
+    var first: usize = 0
+    while first < prev.len && first < cur.len && prev[first].same(cur[first])
+        first += 1
+    if first == prev.len && first == cur.len then return 0
+
+    var old_end = prev.len
+    var new_end = cur.len
+    while old_end > first && new_end > first && prev[old_end - 1].same(cur[new_end - 1])
+        old_end -= 1
+        new_end -= 1
+
+    // A changed clip can affect identical drawing commands after it. Repaint
+    // conservatively rather than treating a state change as an empty rectangle.
+    for i in first..<old_end
+        if prev[i].kind == KIND_CLIP || prev[i].kind == KIND_UNCLIP then return all
+    for i in first..<new_end
+        if cur[i].kind == KIND_CLIP || cur[i].kind == KIND_UNCLIP then return all
+
+    val count = if old_end > new_end then old_end else new_end
     var mask: u32 = 0
-
-    for i in 0..<count
-        val differs = i >= prev.len || i >= cur.len || !prev[i].same(cur[i])
-
+    for i in first..<count
+        val differs = i >= old_end || i >= new_end || !prev[i].same(cur[i])
         if differs
-            if i < prev.len then mask = mask | bands_touching(prev[i].bounds(), screen, n)
-            if i < cur.len then mask = mask | bands_touching(cur[i].bounds(), screen, n)
+            if i < old_end then mask |= bands_touching(prev[i].bounds(), screen, n)
+            if i < new_end then mask |= bands_touching(cur[i].bounds(), screen, n)
 
     mask & all
 end damage

@@ -635,3 +635,30 @@ private a_whole_panel_draws_through_the_framebuffer_with_no_allocator()
     // it drew something is what says the widgets really went through the backend.
     assert(lit(px[0..<320 * 60]) > 500, "a panel's worth of pixels was written")
 end a_whole_panel_draws_through_the_framebuffer_with_no_allocator
+
+@test
+private inserted_focus_outline_keeps_the_unchanged_tail_clean()
+    val face = Cmd(KIND_FILL, Rect(0,30,100,20), 0xFF000000, "")
+    val outline = Cmd(KIND_FILL, Rect(0,30,100,2), 0xFFFFFFFF, "")
+    val tail = Cmd(KIND_FILL, Rect(0,400,100,20), 0xFF000000, "")
+    val a = [face, tail]
+    val b = [face, outline, tail]
+    val expected = 1u32 << 1
+    assert(damage(a[..], b[..], screen(), 16) == expected)
+    assert(damage(b[..], a[..], screen(), 16) == expected)
+    assert(damage(a[..], a[..], screen(), 16) == 0)
+    assert(damage([], [], screen(), 16) == 0)
+    assert(damage([], b[..], screen(), 16) == (expected | (1u32 << 13)))
+    assert(damage(b[..], [], screen(), 16) == (expected | (1u32 << 13)))
+
+@test
+private changed_clip_repaints_even_when_the_draw_commands_match()
+    val clip = Cmd(KIND_CLIP, Rect(0,30,100,20), 0, "")
+    val draw = Cmd(KIND_FILL, screen(), 0xFFFFFFFF, "")
+    val a = [draw]
+    val b = [clip, draw]
+    assert(damage(a[..], b[..], screen(), 16) == all_bands(16))
+    assert(damage(b[..], a[..], screen(), 16) == all_bands(16))
+    val changed = [Cmd(KIND_CLIP, Rect(0,240,100,20), 0, ""), draw]
+    assert(damage(b[..], changed[..], screen(), 16) == all_bands(16))
+    assert(damage(b[..], b[..], screen(), 16) == 0)

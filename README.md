@@ -7,7 +7,7 @@ antialiased vector graphics and TrueType text on the MCU.
 
 ```hocon
 dependencies {
-  imui { git = "github.com/sysl-lang/imui", version = "0.2.0" }
+  imui { git = "github.com/sysl-lang/imui", version = "0.2.1" }
 }
 ```
 
@@ -120,11 +120,11 @@ Adjacent dirty bands come back as **one** rectangle, so two bands cost one windo
 rather than two. The demo's scripted run prints what this is worth: an idle frame repaints 30 rows
 of 480, and moving a slider repaints 60.
 
-Two things about it are worth knowing before relying on it. The comparison is **by position in the
-list**, so a widget added or removed part-way through shifts everything after it and dirties the rest
-of the screen — the right trade for a panel, where the same widgets are emitted in the same order
-every frame. And a frame that **overflows** its command list has no usable record of itself, so
-`overflowed` must be checked and answered with `all_bands`; the library will not silently guess.
+Damage comparison skips a matching prefix and suffix, then compares the changed middle
+by position. Adding or removing a focus outline no longer dirties every unchanged widget
+that follows it. This remains linear and allocation-free. A changed clip in the middle
+conservatively repaints the screen, since it can affect otherwise identical drawing
+commands. A frame that overflows its command list must still use `all_bands`.
 
 What immediate mode costs
 -------------------------
@@ -196,7 +196,7 @@ Enable the backend as a dependency feature:
 
 ```hocon
 dependencies {
-  imui { git = "github.com/sysl-lang/imui", version = "0.2.0", features = [plutovg] }
+  imui { git = "github.com/sysl-lang/imui", version = "0.2.1", features = [plutovg] }
 }
 ```
 
