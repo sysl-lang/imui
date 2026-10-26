@@ -7,7 +7,7 @@ antialiased vector graphics and TrueType text on the MCU.
 
 ```hocon
 dependencies {
-  imui { git = "github.com/sysl-lang/imui", version = "0.2.1" }
+  imui { git = "github.com/sysl-lang/imui", version = "0.3.0" }
 }
 ```
 
@@ -196,7 +196,7 @@ Enable the backend as a dependency feature:
 
 ```hocon
 dependencies {
-  imui { git = "github.com/sysl-lang/imui", version = "0.2.1", features = [plutovg] }
+  imui { git = "github.com/sysl-lang/imui", version = "0.3.0", features = [plutovg] }
 }
 ```
 
@@ -225,3 +225,30 @@ A bitmap `FrameBuffer` remains available for smaller devices without a heap.
 
 Version 0.2.0 also fixes toggles and checkboxes to paint their updated state in
 the activation frame, which matters when firmware only redraws on input changes.
+
+### Rounded widget styling
+
+Set `Theme.radius` to round panels, buttons, checkboxes, toggles and slider
+tracks/thumbs. Zero preserves square corners. Themes are values, so a caller can
+use different radii for different controls without global styling state:
+
+```sysl
+var controls = dark()
+controls.radius = 8
+accent_button(&ui, &painter, controls, button_rect, "Apply")
+var pills = controls
+pills.radius = 13
+toggle(&ui, &painter, pills, toggle_rect, "Power", &enabled)
+```
+
+`Painter.fill_round_rect` and `stroke_round_rect` clamp radius to half the
+shorter side. Outlines stay inside their bounds and leave the interior untouched.
+PlutoVG renders antialiased paths; basic painters use allocation-free integer
+spans, with straight middle sections filled as rectangles. Recording keeps each
+rounded operation as one command, and damage detection includes radius and
+border-width changes. Progress bars and tabs keep their existing square style.
+
+Version 0.3.0 adds a final `radius` field to `Theme` (use zero in manual
+constructors) and `radius`/`width` fields to `Cmd`. Existing painter implementations
+inherit rounded-shape fallbacks; overriding them is optional. Interaction targets
+remain rectangular, preserving usable touch areas at rounded corners.

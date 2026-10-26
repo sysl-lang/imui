@@ -3,7 +3,7 @@ module sh.sysl.imui
 
 // The seam between this library and whatever actually puts pixels down.
 //
-// **Four primitives and two questions.** A backend writes `fill_rect`, `draw_text`, `set_clip` and
+// **Four required primitives, two questions, and rounded helpers.** A backend writes `fill_rect`, `draw_text`, `set_clip` and
 // `clear_clip`, and answers `text_width` and `line_height`; everything else in this file has a body
 // already and comes free. That is a small enough surface that PlutoVG, cairo, a terminal and the
 // recorder in `record.sysl` are each a few dozen lines, and it is small enough that a *command
@@ -66,9 +66,12 @@ trait Painter
         if n == 0
             self.fill_rect(r,color)
             return
-        for y in r.y..<r.bottom()
-            val inset = corner_inset(r,n,y)
-            self.fill_rect(Rect(r.x + inset,y,r.w - 2 * inset,1),color)
+        val middle = r.h - 2 * n
+        if middle > 0 then self.fill_rect(Rect(r.x,r.y + n,r.w,middle),color)
+        for row in 0..<n
+            val inset = corner_inset(r,n,r.y + row)
+            self.fill_rect(Rect(r.x + inset,r.y + row,r.w - 2 * inset,1),color)
+            self.fill_rect(Rect(r.x + inset,r.bottom() - 1 - row,r.w - 2 * inset,1),color)
 
     // The outline lies entirely inside the supplied bounds and leaves its
     // interior untouched, including for translucent colors.
@@ -83,7 +86,16 @@ trait Painter
             return
         val inner = r.inset(width)
         val small = if n > width then n - width else 0
-        for y in r.y..<r.bottom()
+        val corner_rows = if n > width then n else width
+        val middle = r.h - 2 * corner_rows
+        if middle > 0
+            self.fill_rect(Rect(r.x,r.y + corner_rows,width,middle),color)
+            self.fill_rect(Rect(r.right() - width,r.y + corner_rows,width,middle),color)
+        var y = r.y
+        while y < r.bottom()
+            if middle > 0 && y == r.y + corner_rows
+                y += middle
+                continue
             val edge = corner_inset(r,n,y)
             val left = r.x + edge
             val right = r.right() - edge
@@ -95,6 +107,7 @@ trait Painter
                 val inside_right = inner.right() - gap
                 if inside_left > left then self.fill_rect(Rect(left,y,inside_left - left,1),color)
                 if right > inside_right then self.fill_rect(Rect(inside_right,y,right - inside_right,1),color)
+            y += 1
 
     // Text laid in a box: `align` is -1 left, 0 centred, 1 right, and it is vertically centred
     // whatever happens.

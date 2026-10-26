@@ -8,10 +8,9 @@ module sh.sysl.imui
 // and text is a blit out of a bitmap font, which is the whole of what `Painter` requires. Everything
 // here runs on a microcontroller with nothing underneath it.
 //
-// It is also the argument against reaching for a vector rasterizer on a board. Cairo and PlutoVG
-// draw paths, curves, gradients and antialiased glyphs, and pay for them with an allocator and a
-// glyph cache -- and a panel of buttons and sliders uses none of it. The four primitives this
-// library asks for are the four a framebuffer already does well.
+// Rounded shapes use the Painter's allocation-free integer span fallback.
+// Applications wanting antialiased curves and text can use the optional PlutoVG
+// painter while keeping the same widget and recording code.
 //
 //     var pixels: [320 * 480]u16              -- or one band of it, for a small machine
 //     var fb = frame_buffer(pixels[0..<320 * 480], 320, 480, font)

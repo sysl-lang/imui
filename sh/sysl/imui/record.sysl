@@ -49,9 +49,8 @@ const KIND_ROUND_STROKE: u8 = 6
 
 // One thing a painter was asked to do.
 //
-// The whole `Painter` surface fits in this, which is not a coincidence: the trait was kept to four
-// primitives *because* a command has to be able to carry any of them, and a trait that grew a fifth
-// would silently make the replay below incomplete.
+// Rounded fills and outlines remain single commands, preserving vector curves
+// through replay rather than flattening them into many rectangular spans.
 struct Cmd
     kind: u8
     r: Rect

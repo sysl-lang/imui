@@ -1,7 +1,7 @@
 module sh.sysl.imui
 @no_alloc
 
-// The colours and the three measurements every widget reads.
+// Widget colors, spacing, border width, touch size and optional corner radius.
 //
 // A struct the caller owns rather than module storage, so two panels can be themed differently and
 // so nothing here holds state that outlives a frame. It is copied by value into each widget call
