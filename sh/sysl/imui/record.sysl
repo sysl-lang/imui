@@ -115,17 +115,17 @@ impl[M: Painter] Painter for Recorder[M]
     fill_rect(*self, r: Rect, color: u32)
         if !r.is_empty() then self.put(Cmd(KIND_FILL, r, color, "", 0, 0))
 
-    fill_round_rect(*self, r: Rect, color: u32, radius: int)
+    override fill_round_rect(*self, r: Rect, color: u32, radius: int)
         if r.is_empty() then return
         val n = corner_radius(r,radius)
         if n == 0 then self.fill_rect(r,color)
         else self.put(Cmd(KIND_ROUND_FILL,r,color,"",n,0))
 
-    stroke_round_rect(*self, r: Rect, color: u32, radius: int, width: int)
+    override stroke_round_rect(*self, r: Rect, color: u32, radius: int, width: int)
         if r.is_empty() || width <= 0 then return
         val n = corner_radius(r,radius)
         if n == 0 then self.stroke_rect(r,color,width)
-        elif r.inset(width).is_empty() then self.fill_round_rect(r,color,n)
+        elif stroke_fills(r,width) then self.fill_round_rect(r,color,n)
         else self.put(Cmd(KIND_ROUND_STROKE,r,color,"",n,width))
 
     draw_text(*self, x: int, y: int, s: string, color: u32)

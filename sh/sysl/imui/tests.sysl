@@ -662,3 +662,65 @@ private changed_clip_repaints_even_when_the_draw_commands_match()
     val changed = [Cmd(KIND_CLIP, Rect(0,240,100,20), 0, "", 0, 0), draw]
     assert(damage(b[..], changed[..], screen(), 16) == all_bands(16))
     assert(damage(b[..], b[..], screen(), 16) == 0)
+
+@test
+private rounded_fills_and_inside_outlines_are_clipped_and_symmetric()
+    val bits = solid_then_blank()
+    var filled: [16 * 16]u16 = [0;256]
+    var edged: [16 * 16]u16 = [0;256]
+    var a = frame_buffer(filled[..],16,16,test_font(bits[..]))
+    var b = frame_buffer(edged[..],16,16,test_font(bits[..]))
+    val r = Rect(2,2,12,12)
+    a.fill_round_rect(r,0xFFFFFFFF,6)
+    b.stroke_round_rect(r,0xFFFFFFFF,6,2)
+    assert(filled[2 * 16 + 2] == 0 && filled[8 * 16 + 8] != 0)
+    assert(edged[8 * 16 + 8] == 0 && edged[2 * 16 + 8] != 0)
+    for y in 0..<16
+        for x in 0..<16
+            val at = y * 16 + x
+            assert(filled[at] == filled[y * 16 + 15 - x])
+            assert(filled[at] == filled[(15 - y) * 16 + x])
+            if edged[at] != 0 then assert(filled[at] != 0)
+            if !r.contains(x,y) then assert(filled[at] == 0 && edged[at] == 0)
+    b.clear_clip()
+    b.set_clip(Rect(0,0,8,16))
+    b.fill_round_rect(Rect(-4,-4,12,12),0xFF123456,2147483647)
+    assert(edged[7 * 16 + 14] == 0)
+    assert(corner_radius(Rect(0,0,5,3),99) == 1)
+    assert(corner_radius(r,-1) == 0 && corner_radius(empty_rect(),99) == 0)
+    b.clear_clip()
+    b.stroke_round_rect(r,0xFFFFFFFF,6,2147483647)
+    assert(edged[8 * 16 + 8] != 0)
+
+@test
+private rounded_commands_replay_exactly_and_radius_or_width_changes_damage_the_shape()
+    var m = metrics(7,14)
+    var commands: [8]Cmd
+    var rec = recorder(&m,commands[..])
+    val r = Rect(2,32,20,20)
+    rec.fill_round_rect(r,0xFFFFFFFF,6)
+    rec.stroke_round_rect(r,0xFF123456,6,2)
+    assert(rec.n == 2 && rec.cmds[0].radius == 6 && rec.cmds[1].width == 2)
+    var previous: [2]Cmd = [rec.cmds[0],rec.cmds[1]]
+    assert(damage(previous[..],rec.recorded(),screen(),16) == 0)
+    rec.cmds[0].radius = 5
+    assert(damage(previous[..],rec.recorded(),screen(),16) == (1u32 << 1))
+    rec.cmds[0].radius = 6
+    rec.cmds[1].width = 3
+    assert(damage(previous[..],rec.recorded(),screen(),16) == (1u32 << 1))
+    val bits = solid_then_blank()
+    var direct: [32 * 64]u16 = [0;2048]
+    var recorded: [32 * 64]u16 = [0;2048]
+    var a = frame_buffer(direct[..],32,64,test_font(bits[..]))
+    var b = frame_buffer(recorded[..],32,64,test_font(bits[..]))
+    a.fill_round_rect(r,0xFFFFFFFF,6)
+    a.stroke_round_rect(r,0xFF123456,6,3)
+    replay(rec.recorded(),&b,Rect(0,0,32,64))
+    for i in 0..<direct.len do assert(direct[i] == recorded[i])
+    rec.reset()
+    rec.fill_round_rect(Rect(0,0,10,4),0xFFFFFFFF,999)
+    assert(rec.cmds[0].radius == 2)
+    rec.reset()
+    rec.fill_round_rect(empty_rect(),0,4)
+    rec.stroke_round_rect(r,0,4,0)
+    assert(rec.n == 0)

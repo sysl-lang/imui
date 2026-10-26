@@ -137,3 +137,8 @@ private[imui] corner_inset(r: Rect, radius: int, y: int) -> int
         val dx = 2 * long(n - mid) - 1
         if dx * dx + dy * dy <= rr * rr then hi = mid else lo = mid + 1
     lo
+
+/** An inset that would consume the shape; avoid overflowing 2 * width. */
+stroke_fills(r: Rect, width: int) -> bool
+    val side = if r.w < r.h then r.w else r.h
+    side > 0 && width >= side / 2 + side % 2

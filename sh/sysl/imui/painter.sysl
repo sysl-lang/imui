@@ -48,6 +48,9 @@ trait Painter
     // is the case this library is for -- would rather have four spans than one path.
     stroke_rect(*self, r: Rect, color: u32, n: int)
         if r.is_empty() || n <= 0 then return
+        if stroke_fills(r,n)
+            self.fill_rect(r,color)
+            return
 
         self.fill_rect(Rect(r.x, r.y, r.w, n), color)
         self.fill_rect(Rect(r.x, r.bottom() - n, r.w, n), color)
@@ -75,10 +78,10 @@ trait Painter
         if n == 0
             self.stroke_rect(r,color,width)
             return
-        val inner = r.inset(width)
-        if inner.is_empty()
+        if stroke_fills(r,width)
             self.fill_round_rect(r,color,n)
             return
+        val inner = r.inset(width)
         val small = if n > width then n - width else 0
         for y in r.y..<r.bottom()
             val edge = corner_inset(r,n,y)

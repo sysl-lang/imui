@@ -2,7 +2,7 @@ module sh.sysl.imui.plutovg
 #if feature_plutovg
 @requires(heap)
 
-import sh.sysl.imui.{Painter, Rect, corner_radius}
+import sh.sysl.imui.{Painter, Rect, corner_radius, stroke_fills}
 import sh.sysl.plutovg as vg
 
 /** Embedded vector painter. The application owns the surface storage and font bytes.
@@ -32,7 +32,7 @@ impl Painter for PlutoPainter
         self.canvas.rect(f32(r.x), f32(r.y), f32(r.w), f32(r.h))
         self.canvas.fill()
 
-    fill_round_rect(*self, r: Rect, color: u32, radius: int)
+    override fill_round_rect(*self, r: Rect, color: u32, radius: int)
         if r.is_empty() then return
         val n = corner_radius(r,radius)
         if n == 0
@@ -43,16 +43,16 @@ impl Painter for PlutoPainter
         self.canvas.round_rect(f32(r.x),f32(r.y),f32(r.w),f32(r.h),f32(n),f32(n))
         self.canvas.fill()
 
-    stroke_round_rect(*self, r: Rect, color: u32, radius: int, width: int)
+    override stroke_round_rect(*self, r: Rect, color: u32, radius: int, width: int)
         if r.is_empty() || width <= 0 then return
         val n = corner_radius(r,radius)
         if n == 0
             self.stroke_rect(r,color,width)
             return
-        val inner = r.inset(width)
-        if inner.is_empty()
+        if stroke_fills(r,width)
             self.fill_round_rect(r,color,n)
             return
+        val inner = r.inset(width)
         val small = corner_radius(inner,if n > width then n - width else 0)
         self.canvas.save()
         ink(self.canvas,color)
