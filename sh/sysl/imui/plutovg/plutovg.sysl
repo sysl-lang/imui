@@ -1,0 +1,54 @@
+module sh.sysl.imui.plutovg
+#if feature_plutovg
+@requires(heap)
+
+import sh.sysl.imui.{Painter, Rect}
+import sh.sysl.plutovg as vg
+
+/** Embedded vector painter. The application owns the surface storage and font bytes.
+ * No host files, window system or desktop drawing API participates in rendering.
+ */
+struct PlutoPainter
+    canvas: &vg.Canvas
+    ascent: f32
+    height: int
+    clipped: bool
+
+painter(canvas: &vg.Canvas, font: &vg.Font, size: f32) -> PlutoPainter
+    canvas.set_font_face(font)
+    canvas.font_size(size)
+    val metrics = font.metrics(size)
+    PlutoPainter(canvas, metrics.ascent, int(metrics.ascent - metrics.descent + metrics.line_gap + 0.999), false)
+
+private ink(canvas: &vg.Canvas, color: u32)
+    canvas.rgba(f32((color >> 16) & 255) / 255.0, f32((color >> 8) & 255) / 255.0,
+        f32(color & 255) / 255.0, f32(color >> 24) / 255.0)
+
+impl Painter for PlutoPainter
+    fill_rect(*self, r: Rect, color: u32)
+        if r.is_empty() then return
+        ink(self.canvas, color)
+        self.canvas.begin()
+        self.canvas.rect(f32(r.x), f32(r.y), f32(r.w), f32(r.h))
+        self.canvas.fill()
+
+    draw_text(*self, x: int, y: int, text: string, color: u32)
+        ink(self.canvas, color)
+        self.canvas.fill_text(text, f32(x), f32(y) + self.ascent)
+
+    set_clip(*self, r: Rect)
+        self.clear_clip()
+        self.canvas.save()
+        self.clipped = true
+        self.canvas.begin()
+        self.canvas.rect(f32(r.x), f32(r.y), f32(r.w), f32(r.h))
+        self.canvas.clip()
+
+    clear_clip(*self)
+        if self.clipped
+            self.canvas.restore()
+            self.clipped = false
+
+    text_width(self, text: string) -> int = int(self.canvas.text_extents(text).advance + 0.5)
+    line_height(self) -> int = self.height
+#endif

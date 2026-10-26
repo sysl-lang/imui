@@ -1,13 +1,13 @@
 imui
 ====
 
-An immediate-mode user interface for sysl — no retained tree, no reconciler, and **no allocation at
-all**. Written for a panel on a microcontroller, and it runs on a desktop because nothing in it
-knows the difference.
+An immediate-mode user interface for embedded sysl — no retained tree or reconciler.
+The abstract widget core allocates nothing. An optional PlutoVG backend supplies
+antialiased vector graphics and TrueType text on the MCU.
 
 ```hocon
 dependencies {
-  imui { git = "github.com/sysl-lang/imui", version = "0.1.1" }
+  imui { git = "github.com/sysl-lang/imui", version = "0.2.0" }
 }
 ```
 
@@ -27,9 +27,9 @@ if button(&ui, &painter, th, page.cut_bottom(th.min_touch), "Apply")
 ui.finish()
 ```
 
-There is no `requires` block in the manifest and every file declares `@no_alloc`, which the compiler
-holds the package to — including its tests. It asks the machine for no allocator, no operating
-system and no C library.
+The widget core declares `@no_alloc` and needs no allocator or operating system.
+The optional PlutoVG backend uses an allocator and a C runtime; firmware owns
+that bounded heap, its pixel storage, and the font bytes linked into flash.
 
 The application owns the state
 ------------------------------
@@ -75,11 +75,12 @@ Every widget takes `p: *P` for some `[P: Painter]`, never a `*Painter` object. T
 monomorphize to direct calls: a built program has no method table for this trait and nothing
 dynamically dispatched. That is what keeps the promise on the manifest.
 
-Three backends come with the package
+Graphics backends
 ------------------------------------
 
 | backend | what it is for |
 |---|---|
+| `PlutoPainter` (`plutovg` feature) | embedded antialiased graphics and TrueType text, rendered by vendored PlutoVG into caller-owned ARGB32 storage |
 | `FrameBuffer` | RGB565 straight into storage the caller owns, text blitted from a bitmap font. The board, and the reference implementation |
 | `Recorder[M]` | writes the frame down instead of drawing it, and measures through the real painter. What the damage pass compares |
 | `Metrics` | measures and counts and draws nothing. Lays a screen out before there is a screen, and is what these tests assert against |
@@ -176,7 +177,7 @@ Not built yet
 Tests
 -----
 
-Thirty-one, and they drive the widgets the way a finger does — press, drag off, drag back, release —
+Thirty-three core tests, and they drive the widgets the way a finger does — press, drag off, drag back, release —
 then read the recorded frame back and assert on it.
 
 ```
@@ -187,3 +188,40 @@ License
 -------
 
 [ISC](LICENSE)
+
+PlutoVG in firmware
+-------------------
+
+Enable the backend as a dependency feature:
+
+```hocon
+dependencies {
+  imui { git = "github.com/sysl-lang/imui", version = "0.2.0", features = [plutovg] }
+}
+```
+
+```sysl
+import sh.sysl.imui.plutovg
+import sh.sysl.plutovg as vg
+
+val surface = vg.for_data(argb_pixels[..], width, height, width * 4).unwrap()
+val canvas = vg.canvas(surface).unwrap()
+val font = vg.font_from_data(embed("assets/ui-font.ttf")).unwrap()
+var painter = plutovg.painter(canvas, font, 14.0)
+```
+
+Pass `&painter` to the same widget functions as any other `Painter`. It implements
+rectangle fills, antialiased text, clipping and text measurement. Widgets and
+application state do not depend on the renderer. Font bytes and pixel storage
+must outlive the objects using them. Convert the resulting ARGB32 pixels to the
+format the display takes, such as RGB565, when transmitting them.
+
+The backend is validated through flash-linked Cortex-M33 firmware executing
+inside [Benchtop](https://github.com/sysl-lang/benchtop), including touch-driven
+widgets, antialiased glyph pixels and bounded heap reuse. This exercises the
+embedded renderer and display protocol rather than a desktop graphics backend.
+The 240x240 example uses a 520 KB MCU RAM configuration with a 128 KB heap.
+A bitmap `FrameBuffer` remains available for smaller devices without a heap.
+
+Version 0.2.0 also fixes toggles and checkboxes to paint their updated state in
+the activation frame, which matters when firmware only redraws on input changes.
