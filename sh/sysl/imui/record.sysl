@@ -44,6 +44,8 @@ const KIND_CLIP: u8 = 3
 
 // The clip was dropped.
 const KIND_UNCLIP: u8 = 4
+const KIND_ROUND_FILL: u8 = 5
+const KIND_ROUND_STROKE: u8 = 6
 
 // One thing a painter was asked to do.
 //
@@ -55,6 +57,8 @@ struct Cmd
     r: Rect
     color: u32
     text: string
+    radius: int
+    width: int
 
     // Whether two commands would put the same pixels down.
     //
@@ -64,7 +68,7 @@ struct Cmd
         if self.kind != o.kind then return false
         if self.r.x != o.r.x || self.r.y != o.r.y then return false
         if self.r.w != o.r.w || self.r.h != o.r.h then return false
-        if self.color != o.color then return false
+        if self.color != o.color || self.radius != o.radius || self.width != o.width then return false
 
         self.kind != KIND_TEXT || self.text == o.text
     end same
@@ -109,18 +113,31 @@ struct Recorder[M: Painter]
 
 impl[M: Painter] Painter for Recorder[M]
     fill_rect(*self, r: Rect, color: u32)
-        if !r.is_empty() then self.put(Cmd(KIND_FILL, r, color, ""))
+        if !r.is_empty() then self.put(Cmd(KIND_FILL, r, color, "", 0, 0))
+
+    fill_round_rect(*self, r: Rect, color: u32, radius: int)
+        if r.is_empty() then return
+        val n = corner_radius(r,radius)
+        if n == 0 then self.fill_rect(r,color)
+        else self.put(Cmd(KIND_ROUND_FILL,r,color,"",n,0))
+
+    stroke_round_rect(*self, r: Rect, color: u32, radius: int, width: int)
+        if r.is_empty() || width <= 0 then return
+        val n = corner_radius(r,radius)
+        if n == 0 then self.stroke_rect(r,color,width)
+        elif r.inset(width).is_empty() then self.fill_round_rect(r,color,n)
+        else self.put(Cmd(KIND_ROUND_STROKE,r,color,"",n,width))
 
     draw_text(*self, x: int, y: int, s: string, color: u32)
         val w = self.m.text_width(s)
         val h = self.m.line_height()
 
-        self.put(Cmd(KIND_TEXT, Rect(x, y, w, h), color, s))
+        self.put(Cmd(KIND_TEXT, Rect(x, y, w, h), color, s, 0, 0))
     end draw_text
 
-    set_clip(*self, r: Rect) = self.put(Cmd(KIND_CLIP, r, 0, ""))
+    set_clip(*self, r: Rect) = self.put(Cmd(KIND_CLIP, r, 0, "", 0, 0))
 
-    clear_clip(*self) = self.put(Cmd(KIND_UNCLIP, empty_rect(), 0, ""))
+    clear_clip(*self) = self.put(Cmd(KIND_UNCLIP, empty_rect(), 0, "", 0, 0))
 
     text_width(self, s: string) -> int = self.m.text_width(s)
 
@@ -142,6 +159,10 @@ replay[P: Painter](cmds: []const Cmd, p: *P, only: Rect)
             if c.r.overlaps(only) then p.fill_rect(c.r, c.color)
         else if c.kind == KIND_TEXT
             if c.r.overlaps(only) then p.draw_text(c.r.x, c.r.y, c.text, c.color)
+        else if c.kind == KIND_ROUND_FILL
+            if c.r.overlaps(only) then p.fill_round_rect(c.r,c.color,c.radius)
+        else if c.kind == KIND_ROUND_STROKE
+            if c.r.overlaps(only) then p.stroke_round_rect(c.r,c.color,c.radius,c.width)
         else if c.kind == KIND_CLIP
             p.set_clip(c.r.intersect(only))
         else

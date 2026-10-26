@@ -55,6 +55,44 @@ trait Painter
         self.fill_rect(Rect(r.right() - n, r.y + n, n, r.h - 2 * n), color)
     end stroke_rect
 
+    // Backends may override these with antialiased vector paths. The default
+    // uses clipped horizontal fills, requiring no heap or floating point.
+    fill_round_rect(*self, r: Rect, color: u32, radius: int)
+        if r.is_empty() then return
+        val n = corner_radius(r,radius)
+        if n == 0
+            self.fill_rect(r,color)
+            return
+        for y in r.y..<r.bottom()
+            val inset = corner_inset(r,n,y)
+            self.fill_rect(Rect(r.x + inset,y,r.w - 2 * inset,1),color)
+
+    // The outline lies entirely inside the supplied bounds and leaves its
+    // interior untouched, including for translucent colors.
+    stroke_round_rect(*self, r: Rect, color: u32, radius: int, width: int)
+        if r.is_empty() || width <= 0 then return
+        val n = corner_radius(r,radius)
+        if n == 0
+            self.stroke_rect(r,color,width)
+            return
+        val inner = r.inset(width)
+        if inner.is_empty()
+            self.fill_round_rect(r,color,n)
+            return
+        val small = if n > width then n - width else 0
+        for y in r.y..<r.bottom()
+            val edge = corner_inset(r,n,y)
+            val left = r.x + edge
+            val right = r.right() - edge
+            if y < inner.y || y >= inner.bottom()
+                self.fill_rect(Rect(left,y,right - left,1),color)
+            else
+                val gap = corner_inset(inner,small,y)
+                val inside_left = inner.x + gap
+                val inside_right = inner.right() - gap
+                if inside_left > left then self.fill_rect(Rect(left,y,inside_left - left,1),color)
+                if right > inside_right then self.fill_rect(Rect(inside_right,y,right - inside_right,1),color)
+
     // Text laid in a box: `align` is -1 left, 0 centred, 1 right, and it is vertically centred
     // whatever happens.
     //

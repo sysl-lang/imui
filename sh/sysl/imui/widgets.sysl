@@ -20,8 +20,8 @@ module sh.sysl.imui
 
 // A filled panel with a hairline border -- the background other widgets are laid on.
 panel[P: Painter](p: *P, th: Theme, r: Rect)
-    p.fill_rect(r, th.panel)
-    p.stroke_rect(r, th.border, th.border_w)
+    p.fill_round_rect(r, th.panel, th.radius)
+    p.stroke_round_rect(r, th.border, th.radius, th.border_w)
 
 // A line of text, vertically centred in `r`. `align` is -1 left, 0 centred, 1 right.
 //
@@ -43,12 +43,12 @@ button[P: Painter](ui: *Ui, p: *P, th: Theme, r: Rect, s: string, site_id: u32 =
     val id = ui.id_at(site_id)
     val hit = ui.interact(id, r)
 
-    p.fill_rect(r, ui.control_color(th, id))
+    p.fill_round_rect(r, ui.control_color(th, id), th.radius)
 
     if ui.is_focused(id)
-        p.stroke_rect(r, th.focus, if th.border_w < 2 then 2 else th.border_w)
+        p.stroke_round_rect(r, th.focus, th.radius, if th.border_w < 2 then 2 else th.border_w)
     else
-        p.stroke_rect(r, th.border, th.border_w)
+        p.stroke_round_rect(r, th.border, th.radius, th.border_w)
 
     p.text_in(r, s, th.text, 0)
     hit
@@ -64,9 +64,9 @@ accent_button[P: Painter](ui: *Ui, p: *P, th: Theme, r: Rect, s: string,
     else if ui.is_hot(id) then mix(base, 0xFFFFFFFF, 32)
     else base
 
-    p.fill_rect(r, face)
+    p.fill_round_rect(r, face, th.radius)
 
-    if ui.is_focused(id) then p.stroke_rect(r, th.focus, 2)
+    if ui.is_focused(id) then p.stroke_round_rect(r, th.focus, th.radius, 2)
 
     p.text_in(r, s, th.bg, 0)
     hit
@@ -86,11 +86,11 @@ checkbox[P: Painter](ui: *Ui, p: *P, th: Theme, r: Rect, s: string, on: *bool,
     val side = if r.h < 24 then r.h else 24
     val box = Rect(r.x, r.y + (r.h - side) / 2, side, side)
 
-    p.fill_rect(box, ui.control_color(th, id))
-    p.stroke_rect(box, if ui.is_focused(id) then th.focus else th.border,
+    p.fill_round_rect(box, ui.control_color(th, id), th.radius)
+    p.stroke_round_rect(box, if ui.is_focused(id) then th.focus else th.border, th.radius,
                   if ui.is_focused(id) then 2 else th.border_w)
 
-    if *on then p.fill_rect(box.inset(side / 4), th.accent)
+    if *on then p.fill_round_rect(box.inset(side / 4), th.accent, th.radius)
 
     label(p, th, Rect(box.right() + th.pad, r.y, r.w - side - th.pad, r.h), s, -1)
 
@@ -111,10 +111,10 @@ toggle[P: Painter](ui: *Ui, p: *P, th: Theme, r: Rect, s: string, on: *bool,
 
     label(p, th, Rect(r.x, r.y, r.w - w - th.pad, r.h), s, -1)
 
-    p.fill_rect(track, if *on then th.accent else ui.control_color(th, id))
-    p.fill_rect(knob.inset(2), th.text)
+    p.fill_round_rect(track, if *on then th.accent else ui.control_color(th, id), th.radius)
+    p.fill_round_rect(knob.inset(2), th.text, if th.radius > 2 then th.radius - 2 else 0)
 
-    if ui.is_focused(id) then p.stroke_rect(track, th.focus, 2)
+    if ui.is_focused(id) then p.stroke_round_rect(track, th.focus, th.radius, 2)
 
     hit
 end toggle
@@ -156,13 +156,13 @@ slider[P: Painter](ui: *Ui, p: *P, th: Theme, r: Rect, v: *int, lo: int, hi: int
 
     val at = track.x + ((now - lo) * track.w + span / 2) / span
 
-    p.fill_rect(track, th.control)
-    p.fill_rect(Rect(track.x, track.y, at - track.x, track.h), th.accent)
+    p.fill_round_rect(track, th.control, th.radius)
+    p.fill_round_rect(Rect(track.x, track.y, at - track.x, track.h), th.accent, th.radius)
 
     val head = Rect(at - knob / 2, r.y + (r.h - knob) / 2, knob, knob)
 
-    p.fill_rect(head, ui.control_color(th, id))
-    p.stroke_rect(head, if ui.is_focused(id) then th.focus else th.border,
+    p.fill_round_rect(head, ui.control_color(th, id), th.radius)
+    p.stroke_round_rect(head, if ui.is_focused(id) then th.focus else th.border, th.radius,
                   if ui.is_focused(id) then 2 else th.border_w)
 
     now != before

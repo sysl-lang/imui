@@ -115,3 +115,25 @@ mix(a: u32, b: u32, t: int) -> u32
          (color_b(a) * j + color_b(b) * k) >> 8,
          (color_a(a) * j + color_a(b) * k) >> 8)
 end mix
+
+/** Clamp a corner to the rectangle; negative radii and empty shapes are square. */
+corner_radius(r: Rect, radius: int) -> int
+    val side = if r.w < r.h then r.w else r.h
+    if side <= 0 || radius <= 0 then 0 else if radius > side / 2 then side / 2 else radius
+
+// First covered pixel in a circular corner at this row, using pixel centres.
+// Integer binary search avoids floating point and heap storage in basic backends.
+private[imui] corner_inset(r: Rect, radius: int, y: int) -> int
+    val n = corner_radius(r,radius)
+    val row = y - r.y
+    val edge = if row < n then row else r.h - 1 - row
+    if n == 0 || edge >= n then return 0
+    val dy = 2 * long(n - edge) - 1
+    val rr = 2 * long(n)
+    var lo = 0
+    var hi = n
+    while lo < hi
+        val mid = lo + (hi - lo) / 2
+        val dx = 2 * long(n - mid) - 1
+        if dx * dx + dy * dy <= rr * rr then hi = mid else lo = mid + 1
+    lo

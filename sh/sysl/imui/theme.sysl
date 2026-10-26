@@ -27,6 +27,9 @@ struct Theme
     border_w: int
     min_touch: int
 
+    // Default widget corners; zero preserves the square appearance.
+    radius: int
+
 // A dark theme, which is the one a panel in a case usually wants.
 dark() -> Theme
     Theme(rgb(0x14, 0x16, 0x1a),
@@ -39,7 +42,7 @@ dark() -> Theme
           rgb(0x4a, 0x53, 0x62),
           rgb(0x4f, 0x9c, 0xf5),
           rgb(0x7d, 0xbb, 0xff),
-          8, 1, 44)
+          8, 1, 44, 0)
 end dark
 
 // A light theme, which is the one a bench instrument in a bright room wants.
@@ -54,5 +57,5 @@ light() -> Theme
           rgb(0xc6, 0xcb, 0xd3),
           rgb(0x1a, 0x73, 0xe8),
           rgb(0x1a, 0x73, 0xe8),
-          8, 1, 44)
+          8, 1, 44, 0)
 end light

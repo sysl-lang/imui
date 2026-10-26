@@ -3,7 +3,7 @@
 // backend for embedded antialiased vector/text rendering into caller-owned RAM.
 package {
   name = "imui"
-  version = "0.2.1"
+  version = "0.3.0"
   sysl = "0.6.0"
 }
 features { plutovg = [plutovg] }
