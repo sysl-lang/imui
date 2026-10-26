@@ -1,0 +1,41 @@
+module sh.sysl.imui
+@tests
+@no_alloc
+
+@test("toggle paints its new state in the release frame, in both directions")
+private toggle_same_frame()
+    var px: [4000]u16 = [0;4000]
+    val font = Font([], 0, 0, 0, 0, 0)
+    var fb = frame_buffer(px[..], 100, 40, font)
+    var u = ui()
+    var on = false
+    val th = dark()
+    val r = Rect(0,0,100,40)
+    for want in [true, false]
+        u.begin(pointer(80,20,true))
+        assert(!toggle(&u, &fb, th, r, "", &on, 1))
+        u.finish()
+        u.begin(pointer(80,20,false))
+        assert(toggle(&u, &fb, th, r, "", &on, 1))
+        u.finish()
+        assert(on == want)
+        val x = if want then 80 else 55
+        assert(px[usize(20 * 100 + x)] == rgb565(th.text), "new knob position is drawn without another UI frame")
+
+@test("checkbox paints its new state in the release frame, in both directions")
+private checkbox_same_frame()
+    var px: [4000]u16 = [0;4000]
+    var fb = frame_buffer(px[..], 100, 40, Font([],0,0,0,0,0))
+    var u = ui()
+    var on = false
+    val th = dark()
+    val r = Rect(0,0,100,40)
+    for want in [true, false]
+        u.begin(pointer(10,20,true))
+        assert(!checkbox(&u, &fb, th, r, "", &on, 1))
+        u.finish()
+        u.begin(pointer(10,20,false))
+        assert(checkbox(&u, &fb, th, r, "", &on, 1))
+        u.finish()
+        assert(on == want)
+        assert((px[20 * 100 + 12] == rgb565(th.accent)) == want, "new check state is drawn without another UI frame")

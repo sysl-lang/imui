@@ -82,6 +82,7 @@ checkbox[P: Painter](ui: *Ui, p: *P, th: Theme, r: Rect, s: string, on: *bool,
                      site_id: u32 = site()) -> bool
     val id = ui.id_at(site_id)
     val hit = ui.interact(id, r)
+    if hit then *on = !*on
     val side = if r.h < 24 then r.h else 24
     val box = Rect(r.x, r.y + (r.h - side) / 2, side, side)
 
@@ -93,8 +94,6 @@ checkbox[P: Painter](ui: *Ui, p: *P, th: Theme, r: Rect, s: string, on: *bool,
 
     label(p, th, Rect(box.right() + th.pad, r.y, r.w - side - th.pad, r.h), s, -1)
 
-    if hit then *on = !*on
-
     hit
 end checkbox
 
@@ -104,6 +103,7 @@ toggle[P: Painter](ui: *Ui, p: *P, th: Theme, r: Rect, s: string, on: *bool,
                    site_id: u32 = site()) -> bool
     val id = ui.id_at(site_id)
     val hit = ui.interact(id, r)
+    if hit then *on = !*on
     val h = if r.h < 26 then r.h else 26
     val w = h * 2
     val track = Rect(r.right() - w, r.y + (r.h - h) / 2, w, h)
@@ -115,8 +115,6 @@ toggle[P: Painter](ui: *Ui, p: *P, th: Theme, r: Rect, s: string, on: *bool,
     p.fill_rect(knob.inset(2), th.text)
 
     if ui.is_focused(id) then p.stroke_rect(track, th.focus, 2)
-
-    if hit then *on = !*on
 
     hit
 end toggle
