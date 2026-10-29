@@ -60,9 +60,9 @@ site(file: string = __FILE__, line: int = __LINE__) -> u32
     var h: u32 = 2166136261
 
     for i in 0..<file.len
-        h = (h ^ u32(u8(file[i]))) * 16777619
+        h = (h ^ u32(u8(file[i]))) *% 16777619
 
-    (h ^ u32(line)) * 16777619
+    (h ^ u32(line)) *% 16777619
 end site
 
 // The input of a panel with nothing touched and no button held.
@@ -156,7 +156,7 @@ struct Ui
     //
     // Zero is never handed back, because zero is what `hot`, `active` and `focus` use for "nothing".
     id_at(self, site: u32) -> u32
-        val h = (site ^ self.seed) * 16777619
+        val h = (site ^ self.seed) *% 16777619
 
         if h == 0 then 1 else h
     end id_at

@@ -8,18 +8,18 @@
 // This is the block a consumer writes to reach it:
 //
 //     dependencies {
-//       imui { git = "github.com/sysl-lang/imui", version = "0.1.1" }
+//       imui { git = "github.com/sysl-lang/imui", version = "0.1.2" }
 //     }
 //
 // The coordinate is identity rather than a URL, so it carries no `https://`, and the version is the
-// tag `v0.1.1` on this repository.
+// tag `v0.1.2` on this repository.
 
 package {
   name    = "imui"
-  version = "0.1.1"
+  version = "0.1.2"
 
   // The oldest compiler this builds with.
-  sysl = "0.6.0"
+  sysl = "0.8.0"
 }
 
 // **There is deliberately no `requires` block, and the module says so a second time by declaring

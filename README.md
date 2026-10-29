@@ -7,7 +7,7 @@ knows the difference.
 
 ```hocon
 dependencies {
-  imui { git = "github.com/sysl-lang/imui", version = "0.1.1" }
+  imui { git = "github.com/sysl-lang/imui", version = "0.1.2" }
 }
 ```
 
